@@ -86,4 +86,4 @@ Let’s talk. Let’s call.
 Let’s make a mosaic that starts with a manatee and ends with a movement.
 
 Contact: hello@manateecaller.net  
-GitHub: [github.com/yourusername/ManateeCaller](https://github.com/yourusername/ManateeCaller)
+GitHub: [github.com/wttp3/ManateeCaller](https://github.com/wttp3/ManateeCaller)
