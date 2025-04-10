@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="manateecaller_logo.svg" width="200" alt="ManateeCaller Logo"/>
+  <img src="public/manateecaller_logo.svg" width="200" alt="ManateeCaller Logo"/>
 </p>
 
 <p align="center">
