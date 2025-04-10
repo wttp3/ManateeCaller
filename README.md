@@ -125,6 +125,26 @@ npm start
 
 ---
 
+## 🎧 Advanced Audio Color Mapping
+
+We are extending beyond transcript-based colors to analyze the actual audio of responses.
+
+### 🌈 Audio Metrics Used
+
+| Audio Metric         | Mapped To          |
+|----------------------|-------------------|
+| Pitch                | Hue               |
+| Loudness             | Brightness        |
+| Tempo / Speech Rate  | Saturation        |
+| Duration             | Tile size/opacity |
+| Emotion (AI)         | Color palette     |
+
+Using tools like `ffmpeg`, `meyda`, and emotion detection APIs, we can generate truly unique color tiles that represent not just what was said, but how it was said.
+
+📄 See [audio_analysis_for_color.md](audio_analysis_for_color.md) for technical details and implementation roadmap.
+
+---
+
 ## 💸 Funding & Support
 
 **ManateeCaller** is currently seeking our first wave of **manateeAngel investors** — aquatic-minded patrons who believe in the power of voice, tech, and tenderness.
