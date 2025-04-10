@@ -3,9 +3,9 @@
 </p>
 
 <p align="center">
-  <img src="badges/manatee_love.svg" alt="Made for Manatee Lovers"/>
-  <img src="badges/tech_stack.svg" alt="Built with Node.js + Twilio + TTS"/>
-  <img src="badges/zero_props.svg" alt="Zero Propellers Since 2024"/>
+  <img src="badges/manatee_love.svg" alt="Made for Manatee Lovers" width="162"  />
+  <img src="badges/tech_stack.svg" alt="Built with Node.js + Twilio + TTS" width="212"/>
+  <img src="badges/zero_props.svg" alt="Zero Propellers Since 2024" width="202"/>
 </p>
 
 # 🧜 ManateeCaller
