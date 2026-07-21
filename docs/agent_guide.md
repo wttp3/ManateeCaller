@@ -1,57 +1,31 @@
-# 🧜‍♂️ ManateeCaller Agent Style & Delivery Guide
+# ManateeCaller WhatsApp Prompt Guide
 
-## 🗣️ 1. Voice Delivery Style
+Use a warm, calm tone — like a tide lapping at the mangroves.
 
-Your tone should feel like a **soothing podcast host meets a nature documentary narrator**:
+## Invitation template (Meta-approved)
 
-- **Warm and calm**, like a tide lapping at the mangroves.
-- **Friendly but not pushy** — remember, we’re calling gentle folks who may be mid-manatee cuddle.
-- **Clear articulation**, paced slowly enough to match the serene tempo of a sea cow’s day.
+> Hi {{1}}, this is ManateeCaller — a small opt-in art experiment for manatee lovers. Tap **I'm in** to begin a short voice-note interview on WhatsApp. Reply STOP any time to opt out.
 
-Example prompt line:
-> “Hi there, this is a rather unusual call — but it’s one that starts with your voice… and ends as a color in a digital sea.”
+## After opt-in
 
----
+> Welcome to ManateeCaller. We'll ask three short questions — please reply to each with a voice note. Your answers become one anonymous colour in our shared mosaic. Reply STOP any time to opt out.
 
-## 🤝 2. Establishing Trust (Cold Call Tips)
+## Questions
 
-- **Mention the novelty upfront**: This is not spam, it’s art.
-- **Be transparent**: The call is recorded only for transcription and turned into a single color dot.
-- **Use playful curiosity**: “What color might your thoughts be today?”
-- **Offer a way out**: “If now’s not the right time to float with us, no worries — may your waters stay warm.”
+1. What colour does a calm manatee morning feel like to you? Reply with a voice note.
+2. Tell us about a gentle moment you want to float with today. Reply with a voice note.
+3. If your voice were a ripple in still water, what would it say? Reply with a voice note.
 
----
+## Wrong media
 
-## 🎨 3. Anchoring in Manatee Enthusiasm
+> Please reply with a voice note for this question. Text and other media can't be used for your tile.
 
-These people love manatees. So speak their language:
+## Completion
 
-- “We believe voices—like manatees—deserve space, quiet, and a little mystery.”
-- “Our goal is to honor the calm, reflective energy of manatees through art.”
+> Thank you for floating with us. Your tile is now part of the mosaic: {{mosaic_url}}
 
----
+## Opt-out (`STOP`)
 
-## 😂 4. Soft Manatee Humor (Phase 2, Optional)
+> You've been unsubscribed from ManateeCaller. We won't message you again.
 
-Only once rapport is built, you can sprinkle in these:
-
-- “This call contains zero spam, zero urgency, and zero boat propellers.”
-- “Don’t worry — no manatees were disturbed in the making of this mosaic.”
-- “If your voice were a sea grass, it would definitely be the tastiest one.”
-
----
-
-## 🔕 5. If They Decline or Hang Up
-
-- No pressure, no rebuttals.
-- Offer a soft exit: “No problem at all — stay gentle, and thank you for your time.”
-
----
-
-## 📝 Sample Script (Tone Demo)
-
-> “Hello! This is a small art experiment called ManateeCaller. We use your spoken words to generate a single color in a growing sea of voices.  
-
-> You’ll hear a short message, and then, if you're willing, just say whatever you feel like. That response becomes part of a digital mosaic made only from voices like yours.  
-
-> Ready to float?”
+Do not send follow-ups after STOP. Record the suppression token and stop all outbound messages.

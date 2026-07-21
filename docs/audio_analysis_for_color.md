@@ -1,90 +1,37 @@
-# 🎧 Audio Analysis for Color Mapping in ManateeCaller
+# Audio Processing for Colour Mapping
 
-In **ManateeCaller**, we're evolving from simple transcript-to-color conversion to a **rich, audio-driven mosaic generation system**. This document outlines how we can analyze recorded speech to influence color output and make each tile in the mosaic more uniquely expressive.
+ManateeCaller MVP uses **transcript-based colour mapping**, not raw audio features.
 
----
+## Flow
 
-## 🧠 Why Go Beyond Transcripts?
+1. Download voice note from Meta Cloud API into a temp directory (`TEMP_AUDIO_DIR`).
+2. Transcribe with ElevenLabs speech-to-text.
+3. Store encrypted transcript temporarily in SQL Server until all three answers are collected.
+4. Delete local temp file and call Meta media DELETE for the voice note.
+5. When the interview completes, normalize and combine transcripts, compute colour, erase transcripts.
 
-Transcripts reduce human voice to words, but voices contain *emotion, tone, rhythm*, and *texture*. By analyzing these attributes, we can create tiles that reflect not just *what* was said — but *how* it was said.
+## Colour algorithm
 
----
-
-## 🎛️ Audio Metrics → Color Mapping
-
-| Audio Metric         | What It Represents          | Mapped To Color As...       |
-|----------------------|-----------------------------|-----------------------------|
-| Pitch                | Voice tone/frequency        | Hue                         |
-| Loudness             | Volume/energy               | Brightness                  |
-| Tempo / Speech Rate  | Calm vs urgency             | Saturation                  |
-| Duration             | Length of spoken segment    | Tile size / transparency    |
-| Timbre (tone quality)| Raspy vs smooth             | Texture (future animation?) |
-| Emotion (AI)         | Mood or sentiment           | Palette or color category   |
-
----
-
-## 🛠️ Node.js Tools & Libraries
-
-### 🔊 For Basic Audio Features
-
-- **[ffmpeg](https://ffmpeg.org/)** – Extract raw audio features like duration, volume
-- **[fluent-ffmpeg](https://github.com/fluent-ffmpeg/node-fluent-ffmpeg)** – Node wrapper for ffmpeg
-- **[get-audio-duration](https://www.npmjs.com/package/get-audio-duration)** – Simple duration checker
-
-### 🎵 For Audio Analysis
-
-- **[meyda](https://github.com/meyda/meyda)** – JS audio feature extractor (pitch, spectral features)
-- **[audiowaveform](https://github.com/bbc/audiowaveform)** – Optional waveform data generator (C++)
-
-### 🧠 For AI-driven Emotion
-
-- Use cloud APIs:
-  - **Google Cloud Speech-to-Text**
-  - **Azure Emotion Detection**
-  - **AssemblyAI / Whisper API** (combined emotion + transcript)
-
----
-
-## 🧪 Implementation Flow
-
-1. **Download audio file** from Twilio’s webhook (`RecordingUrl`)
-2. **Save temporarily to disk or buffer**
-3. **Extract features** via local or API tools
-4. **Generate HSL/HEX values** based on:
-   ```js
-   hue = pitchToHue(pitch);
-   saturation = volumeToSaturation(volume);
-   lightness = tempoToLightness(speechRate);
-   hexColor = hslToHex(hue, saturation, lightness);
-   ```
-5. **Send tile info** to frontend
-
----
-
-## 🐚 Bonus Ideas
-
-- Animate tiles with pulsing rhythm based on tempo
-- Add audio waveform trace or glow around voice prints
-- Let users click a tile and play back the original voice
-
----
-
-## 📦 Suggested NPM Modules
-
-```bash
-npm install fluent-ffmpeg get-audio-duration meyda
+```text
+combined = normalize(q1) + "|" + normalize(q2) + "|" + normalize(q3)
+color    = "#" + HMAC-SHA256(TILE_HMAC_KEY, combined).slice(0, 6)
 ```
 
----
+Normalization: trim, lowercase, collapse whitespace.
 
-## 🧪 MVP Integration Plan
+## Retention
 
-- [ ] Store Twilio audio file
-- [ ] Extract pitch/loudness/tempo
-- [ ] Generate HSL → convert to HEX
-- [ ] Return tile color in `/transcript-webhook`
-- [ ] Display tile in mosaic
+| Data | Retention |
+|---|---|
+| Raw audio (local temp) | Deleted immediately after transcription |
+| Raw audio (Meta) | DELETE requested after download |
+| Transcripts | Encrypted until tile created, then NULLed |
+| Tile | Anonymous hex colour + public slug only |
 
----
+## ElevenLabs retention
 
-Let’s make the sea of voices feel alive — one ripple at a time.
+By default ElevenLabs retains STT inputs. Enable Zero Retention (`enable_logging=false`) only if your account supports it, then set `ELEVENLABS_ENABLE_ZERO_RETENTION=true`. Do not claim immediate third-party deletion without verifying this.
+
+## Deferred
+
+Pitch, loudness, tempo, and emotion-based mapping remain future work.

@@ -1,89 +1,39 @@
-# 🧜‍♂️ ManateeCaller: The Voice-to-Art Platform for the Manatee Generation
+# ManateeCaller Pitch
 
-## 🌊 Executive Summary
+## One line
 
-**ManateeCaller** is a playful but powerful platform that turns human voices into generative color art, delivered through Twilio calls and driven by ElevenLabs voice synthesis. It is designed for the world’s most compassionate niche: **manatee owners, lovers, protectors, and poetic souls**.
+Opt-in WhatsApp voice notes become anonymous colours in a shared mosaic — consent-first participatory art for manatee lovers.
 
-This is not just art. This is data. This is connection.  
-And this is a rapidly growing opportunity sitting at the intersection of:
+## The shift
 
-- 🖼️ Generative art
-- 📞 Conversational voice tech
-- 💙 Hyper-niche community bonding
-- 🐋 Wholesome absurdism as an emotional service
+The original concept cold-called strangers via Twilio. The viable version is **asynchronous and consent-first**:
 
-## 📈 Why Now?
+- Signup with dual consent and 18+ gate
+- One approved WhatsApp invitation
+- Three voice-note answers in chat
+- One anonymous tile per completed interview
+- Raw audio and transcripts deleted after processing
 
-We’re witnessing a shift:
-- People crave connection but are tired of screens.
-- Voice tech is booming.
-- Novelty-driven communities (e.g. niche NFTs, Sea Shanty TikTok, mushroom emojis) prove users will show up when they feel *seen*.
+## Why WhatsApp
 
-**ManateeCaller** speaks directly to this movement — literally.
+- Lower friction than phone calls
+- Explicit opt-in maps cleanly to Meta's messaging rules
+- Voice notes are natively supported via Cloud API
+- Service-window messaging keeps ongoing interview costs down
 
-## 🐘 Market Potential (Manatee Math)
+## Stack
 
-While there are only ~13,000 known manatees in the wild, the **cultural manatee market** is much, much larger:
+Node.js, TypeScript, Express, Microsoft SQL Server, Meta WhatsApp Cloud API, ElevenLabs STT.
 
-- Manatee rescue org mailing lists: 2.5M+
-- Wildlife sanctuary visitors/year: 50M+
-- “Sea cow” merch buyers (Etsy etc): 1.1M
-- Marine-themed NFT/art collectors: 900K
-- ASMR / Voice art fans: 4M+
-- Zen-tech crossover audience: 6M+
-- Unusually generous crypto whales: ???
+## Pilot gate
 
-> Our Venn diagram is weird. But it’s real.
+- Meta test number for development
+- Approved invitation template with `I'm in` quick reply
+- Privacy notice + DPIA review before UK/EU participants
+- ElevenLabs Zero Retention verified before claiming full provider deletion
 
-## 💡 The Product
+## Contact
 
-**ManateeCaller** lets users:
+hello@manateecaller.net
 
-1. Input custom text
-2. Generate a soothing TTS
-3. Send it via outbound call
-4. Capture the recipient’s voice
-5. Hash that response into a HEX color
-6. Render it in a collective artwork mosaic
-
-Built with:
-- Node.js + Express
-- Twilio Programmable Voice
-- ElevenLabs TTS
-- In-memory & SQL-ready storage
-- HTML/CSS frontend mosaic
-
-## 💰 Monetization Ideas
-
-- Pay-per-call art generation: $0.99 per call
-- Custom mosaics for donors: $5–$20 tiered
-- Gallery sales (NFT-ready): % commission
-- Manatee sanctuary tie-ins: Sponsored campaigns
-- Corporate team retreats: B2B per-seat licensing
-
-## 💸 Funding Goals
-
-We’re seeking **$30,000 pre-seed** to expand the MVP into a fully hosted, scalable experience:
-
-- Voice personalization tooling
-- Outreach to manatee NGOs & merch partners
-- NFT/snapshot features
-- International manatee hotline numbers
-- Voice artist collabs
-- Legal & security foundation
-
-## 🌟 Why We’ll Win
-
-- We lean into the absurd and the sincere — both make news.
-- Voice is underexplored in community art.
-- We *own* the manatee aesthetic. No one else is calling.
-
-## 📞 Ready to Float?
-
-If this project made you pause, smile, or feel a little strange inside — that’s the point.
-
-Let’s talk. Let’s call.  
-Let’s make a mosaic that starts with a manatee and ends with a movement.
-
-Contact: hello@manateecaller.net  
-GitHub: [github.com/wttp3/ManateeCaller](https://github.com/wttp3/ManateeCaller)
+GitHub: https://github.com/wttp3/ManateeCaller

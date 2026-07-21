@@ -7,120 +7,126 @@
   <img src="badges/zero_props.svg" alt="Zero Propellers Since 2024" width="202"/>
 </p>
 
-# 🧜 ManateeCaller
+# ManateeCaller
 
-**ManateeCaller** is an opt-in **WhatsApp voice-note art experiment** for **manatee lovers and enthusiasts**. People sign up, explicitly agree to be contacted on WhatsApp, and answer a few gentle questions with voice notes. Each response becomes a single anonymous **colour tile** in a growing, shared mosaic — a sea of voices, no two the same.
+**ManateeCaller** is an opt-in **WhatsApp voice-note art experiment** for **manatee lovers and enthusiasts**. People sign up, explicitly agree to be contacted on WhatsApp, and answer a few gentle questions with voice notes. When the interview completes, their combined answers become **one anonymous colour tile** in a growing shared mosaic.
 
-> This is a rework of the original cold-call concept. Instead of ringing strangers, ManateeCaller is **consent-first and asynchronous**: nobody is contacted without opting in, and raw audio is deleted as soon as its tile is made.
-
----
-
-## 🌊 How It Works
-
-1. **Sign up.** A participant enters their name and WhatsApp number on a mobile-friendly page, confirms they're 16+, reads the privacy notice, and gives explicit consent to be interviewed on WhatsApp.
-2. **Invitation.** We send one approved WhatsApp template that identifies ManateeCaller and offers a clear way out. Tapping "I'm in" opens the conversation.
-3. **The interview.** A short, friendly chat asks 2–3 questions. The participant replies with a **voice note** to each.
-4. **Voice → colour.** Each voice note is transcribed (via ElevenLabs), hashed into a deterministic hex colour, and turned into a tile. **The raw audio is then deleted.**
-5. **The mosaic.** Tiles appear anonymously in a public mosaic — colour only, no names, no numbers, no playback.
-
-```mermaid
-flowchart LR
-    Signup[Signup + Consent] --> Invite[WhatsApp Template]
-    Invite --> Interview[Voice-Note Interview]
-    Interview --> Process[Transcribe + Colour]
-    Process --> Delete[Delete Raw Audio]
-    Process --> Mosaic[Anonymous Mosaic]
-```
+> Consent-first and asynchronous: nobody is contacted without opting in. Raw audio is deleted after processing; transcripts are erased once the tile is created.
 
 ---
 
-## 🔒 Privacy & Consent (UK/EU)
+## How It Works
 
-ManateeCaller is designed for UK/EU participants and treats every voice note as personal data.
-
-- **Explicit, recorded consent** is collected at signup, with a timestamp and the exact wording shown.
-- **Two consents are kept distinct:** consent to be contacted on WhatsApp, and consent for voice recording/processing.
-- **Data minimisation:** we keep only the derived tile data. Raw audio is deleted immediately after a tile is generated; phone numbers are stored privately and never appear in artwork.
-- **Rights & opt-out:** `STOP` suppresses further messages, and participants can withdraw consent or request deletion at any time.
-- A DPIA and privacy notice (controller identity, lawful basis, retention, contact route) ship as scaffolding for legal review before any real-world pilot.
+1. **Sign up** at `/` with name, WhatsApp number, 18+ confirmation, privacy notice, and dual consent.
+2. **Invitation** — one approved WhatsApp template with an `I'm in` reply opens the service window.
+3. **Interview** — three short questions, each answered with a voice note.
+4. **Voice → colour** — ElevenLabs transcribes each note; when all three are in, transcripts are combined and mapped to a colour via `HMAC-SHA-256`. Raw audio and transcripts are then deleted.
+5. **Mosaic** — one anonymous tile appears at `/mosaic.html` (colour only).
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
-- **Node.js / TypeScript / Express**
-- **Meta WhatsApp Business Cloud API** (messaging, media, webhooks)
-- **ElevenLabs** speech-to-text
-- **PostgreSQL** for participants, consents, sessions, and tiles
-- **HTML/CSS** signup + anonymous mosaic
+- Node.js / TypeScript / Express
+- Microsoft SQL Server (2022 or Azure SQL)
+- Meta WhatsApp Business Cloud API
+- ElevenLabs speech-to-text
 
 ---
 
-## 📦 Setup & Run Locally
+## Setup
 
 ### Requirements
 
 - Node.js 18+
-- PostgreSQL 14+
-- A Meta WhatsApp Business app (the **test number** is enough to build and pilot)
-- An ElevenLabs API key
-- A tunnel (e.g. ngrok) to receive Meta webhooks locally
+- SQL Server (local Docker compose included)
+- Meta WhatsApp Business app test number
+- ElevenLabs API key
+- ngrok or similar for webhooks locally
 
-### .env File
+### Local SQL Server
 
-```
-PORT=3000
-DATABASE_URL=postgres://user:pass@localhost:5432/manateecaller
-
-# Meta WhatsApp Cloud API
-WHATSAPP_PHONE_NUMBER_ID=...
-WHATSAPP_BUSINESS_ACCOUNT_ID=...
-WHATSAPP_ACCESS_TOKEN=...
-WHATSAPP_APP_SECRET=...
-WHATSAPP_WEBHOOK_VERIFY_TOKEN=...
-WHATSAPP_TEMPLATE_NAME=manatee_invite
-
-# ElevenLabs
-ELEVENLABS_API_KEY=...
-
-# Encryption key for phone numbers at rest (32-byte hex)
-DATA_ENCRYPTION_KEY=...
+```bash
+docker compose up -d
 ```
 
-### Install & Run
+### Secrets (never commit real values)
+
+```bash
+cp .env.example .env
+# Edit .env locally — do not commit this file
+```
+
+Required variables are documented in [`.env.example`](.env.example).
+
+Generate encryption keys:
+
+```bash
+openssl rand -hex 32
+```
+
+### Install, migrate, run
 
 ```bash
 npm install
 npm run migrate
+npm run dev
+```
+
+Open `http://localhost:3000` for signup. Point Meta webhooks to `https://<tunnel>/webhook/whatsapp`.
+
+---
+
+## API
+
+| Endpoint | Description |
+|---|---|
+| `POST /api/signup` | Create participant, record consents, queue WhatsApp invite |
+| `GET /api/mosaic` | List anonymous artwork tiles |
+| `POST /api/erasure` | Delete participant data; retain suppression token |
+| `GET/POST /webhook/whatsapp` | Meta webhook verification and inbound messages |
+| `GET /health` | Health check (secrets redacted) |
+
+---
+
+## Privacy (UK/EU pilot)
+
+- Dual consent: WhatsApp contact + voice processing
+- 18+ gate at signup
+- Phone numbers encrypted at rest with separate lookup hash for deduplication/suppression
+- Raw audio deleted after each voice note is processed
+- Transcripts deleted after tile generation
+- Reply `STOP` on WhatsApp to opt out
+- ElevenLabs Zero Retention (`ELEVENLABS_ENABLE_ZERO_RETENTION=true`) required before claiming full third-party deletion — otherwise disclose provider retention in the privacy notice
+
+See [`public/privacy.html`](public/privacy.html).
+
+---
+
+## Meta template
+
+Create and approve a WhatsApp template named `manatee_invite` (or set `WHATSAPP_TEMPLATE_NAME`) that:
+
+- Identifies **ManateeCaller**
+- Explains the voice-note interview
+- Includes a quick-reply button mapped to payload `IM_IN`
+- Offers opt-out language
+
+---
+
+## Development
+
+```bash
+npm test          # unit tests
+npm run typecheck
+npm run build
 npm start
 ```
 
----
-
-## 🗺️ Roadmap
-
-### ✅ MVP (invitation-only pilot)
-
-- [ ] Signup page with dual consent + age gate
-- [ ] Meta Cloud API messaging, webhooks, and media download
-- [ ] Interview state machine (ordered prompts, retries, opt-out)
-- [ ] Transcribe → deterministic hex colour → tile
-- [ ] Delete raw audio after processing
-- [ ] Anonymous public mosaic
-
-### 🧪 Later
-
-- [ ] Richer audio-driven colour (pitch/loudness) with ffmpeg + meyda
-- [ ] Background queue/worker for processing at volume
-- [ ] Full WhatsApp Business verification + higher messaging tier
-- [ ] Downloadable / shareable mosaic snapshots
-
-### 🐚 Deferred
-
-- WhatsApp **voice calls** (requires Meta Calling eligibility + SIP/WebRTC) — revisit only if demand justifies it.
+CI runs tests, typecheck, and Gitleaks secret scanning on push/PR.
 
 ---
 
-## 📄 License
+## License
 
-MIT – Use freely, remix boldly.
+MIT

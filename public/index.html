@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ManateeCaller — Sign up</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="container">
+    <img src="/manateecaller_logo.svg" alt="ManateeCaller" class="logo" />
+    <h1>Float with us</h1>
+    <p class="lede">Opt in to a short WhatsApp voice-note interview. Your answers become one anonymous colour tile in our shared mosaic.</p>
+
+    <form id="signup-form">
+      <label>
+        Name
+        <input type="text" name="name" required maxlength="120" autocomplete="name" />
+      </label>
+      <label>
+        WhatsApp number (include country code)
+        <input type="tel" name="phone" required placeholder="+447..." autocomplete="tel" />
+      </label>
+
+      <fieldset>
+        <legend>Consent</legend>
+        <label class="checkbox">
+          <input type="checkbox" name="ageConfirmed" required />
+          I confirm I am 18 or older.
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="privacyAccepted" required />
+          I have read the <a href="/privacy.html">privacy notice</a>.
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="whatsappConsent" required />
+          I agree that ManateeCaller may contact me on WhatsApp for the voice-note interview.
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="voiceConsent" required />
+          I agree that my voice notes will be transcribed to create an anonymous colour tile. Raw audio will be deleted after processing.
+        </label>
+      </fieldset>
+
+      <button type="submit">Join the mosaic</button>
+      <p id="form-message" class="message" hidden></p>
+    </form>
+  </main>
+  <script src="/signup.js"></script>
+</body>
+</html>
