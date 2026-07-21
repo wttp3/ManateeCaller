@@ -4,66 +4,55 @@
 
 <p align="center">
   <img src="badges/manatee_love.svg" alt="Made for Manatee Lovers" width="162"  />
-  <img src="badges/tech_stack.svg" alt="Built with Node.js + Twilio + TTS" width="212"/>
   <img src="badges/zero_props.svg" alt="Zero Propellers Since 2024" width="202"/>
 </p>
 
 # 🧜 ManateeCaller
 
-**ManateeCaller** is a creative Node.js-based telephony art experiment—designed especially for **manatee owners, lovers, and enthusiasts**. It uses **text-to-speech (TTS)** and **phone calls** to turn their spoken feelings into **color mosaics**. Think of it as voice-triggered generative art for gentle sea cow admirers.
+**ManateeCaller** is an opt-in **WhatsApp voice-note art experiment** for **manatee lovers and enthusiasts**. People sign up, explicitly agree to be contacted on WhatsApp, and answer a few gentle questions with voice notes. Each response becomes a single anonymous **colour tile** in a growing, shared mosaic — a sea of voices, no two the same.
+
+> This is a rework of the original cold-call concept. Instead of ringing strangers, ManateeCaller is **consent-first and asynchronous**: nobody is contacted without opting in, and raw audio is deleted as soon as its tile is made.
 
 ---
 
-## 🚀 What It Does
+## 🌊 How It Works
 
-1. **Takes your text** and uses **ElevenLabs** to generate an MP3.
-2. **Calls a phone number** (only those of verified manatee enthusiasts) via **Twilio**, playing that MP3.
-3. **Records the callee’s spoken response**, transcribes it.
-4. **Hashes the text into a hex color code** (like `#ff5733`).
-5. **Displays those colors** as a growing HTML mosaic of all calls so far.
+1. **Sign up.** A participant enters their name and WhatsApp number on a mobile-friendly page, confirms they're 16+, reads the privacy notice, and gives explicit consent to be interviewed on WhatsApp.
+2. **Invitation.** We send one approved WhatsApp template that identifies ManateeCaller and offers a clear way out. Tapping "I'm in" opens the conversation.
+3. **The interview.** A short, friendly chat asks 2–3 questions. The participant replies with a **voice note** to each.
+4. **Voice → colour.** Each voice note is transcribed (via ElevenLabs), hashed into a deterministic hex colour, and turned into a tile. **The raw audio is then deleted.**
+5. **The mosaic.** Tiles appear anonymously in a public mosaic — colour only, no names, no numbers, no playback.
 
----
-
-## 🔧 REST API Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `POST /generate-tts` | Generate MP3 from text (returns `audio_url`) |
-| `POST /make-call` | Call a number and play the MP3 |
-| `POST /call-webhook` | Twilio webhook to return TwiML (MP3 + record/transcribe) |
-| `POST /transcript-webhook` | Receive transcript from Twilio, convert to hex color |
-| `GET /artwork` | View HTML mosaic of all captured color codes |
-
----
-
-## 🗃️ Example JSON Inputs
-
-### Generate TTS
-```json
-POST /generate-tts
-{
-  "text": "Hello, your colors await!"
-}
-```
-
-### Make a Call
-```json
-POST /make-call
-{
-  "phoneNumber": "+1234567890",
-  "audioUrl": "https://example.com/audio.mp3"
-}
+```mermaid
+flowchart LR
+    Signup[Signup + Consent] --> Invite[WhatsApp Template]
+    Invite --> Interview[Voice-Note Interview]
+    Interview --> Process[Transcribe + Colour]
+    Process --> Delete[Delete Raw Audio]
+    Process --> Mosaic[Anonymous Mosaic]
 ```
 
 ---
 
-## 🌈 How Color Codes Work
+## 🔒 Privacy & Consent (UK/EU)
 
-The transcript from the phone call is hashed using a simple algorithm (e.g., SHA-256 or MD5). The first 6 hex digits of the hash become the color code. For example:
+ManateeCaller is designed for UK/EU participants and treats every voice note as personal data.
 
-```
-"today I feel blue" → hash → #7ac9d2
-```
+- **Explicit, recorded consent** is collected at signup, with a timestamp and the exact wording shown.
+- **Two consents are kept distinct:** consent to be contacted on WhatsApp, and consent for voice recording/processing.
+- **Data minimisation:** we keep only the derived tile data. Raw audio is deleted immediately after a tile is generated; phone numbers are stored privately and never appear in artwork.
+- **Rights & opt-out:** `STOP` suppresses further messages, and participants can withdraw consent or request deletion at any time.
+- A DPIA and privacy notice (controller identity, lawful basis, retention, contact route) ship as scaffolding for legal review before any real-world pilot.
+
+---
+
+## 🛠️ Tech Stack
+
+- **Node.js / TypeScript / Express**
+- **Meta WhatsApp Business Cloud API** (messaging, media, webhooks)
+- **ElevenLabs** speech-to-text
+- **PostgreSQL** for participants, consents, sessions, and tiles
+- **HTML/CSS** signup + anonymous mosaic
 
 ---
 
@@ -72,23 +61,37 @@ The transcript from the phone call is hashed using a simple algorithm (e.g., SHA
 ### Requirements
 
 - Node.js 18+
-- A Twilio account
+- PostgreSQL 14+
+- A Meta WhatsApp Business app (the **test number** is enough to build and pilot)
 - An ElevenLabs API key
-- Ngrok (for local Twilio webhooks)
+- A tunnel (e.g. ngrok) to receive Meta webhooks locally
 
 ### .env File
+
 ```
 PORT=3000
-TWILIO_ACCOUNT_SID=...
-TWILIO_AUTH_TOKEN=...
-TWILIO_NUMBER=+1234567890
+DATABASE_URL=postgres://user:pass@localhost:5432/manateecaller
+
+# Meta WhatsApp Cloud API
+WHATSAPP_PHONE_NUMBER_ID=...
+WHATSAPP_BUSINESS_ACCOUNT_ID=...
+WHATSAPP_ACCESS_TOKEN=...
+WHATSAPP_APP_SECRET=...
+WHATSAPP_WEBHOOK_VERIFY_TOKEN=...
+WHATSAPP_TEMPLATE_NAME=manatee_invite
+
+# ElevenLabs
 ELEVENLABS_API_KEY=...
-ELEVENLABS_DEFAULT_VOICE=optional-voice-id
+
+# Encryption key for phone numbers at rest (32-byte hex)
+DATA_ENCRYPTION_KEY=...
 ```
 
 ### Install & Run
+
 ```bash
 npm install
+npm run migrate
 npm start
 ```
 
@@ -96,68 +99,25 @@ npm start
 
 ## 🗺️ Roadmap
 
-### ✅ MVP / Core Functionality
-- [x] Text to MP3 (via ElevenLabs)
-- [x] Outbound call with Twilio
-- [x] Record/transcribe user response
-- [x] Convert to hex color code
-- [x] Render mosaic in browser
+### ✅ MVP (invitation-only pilot)
 
-### 🧪 Improvements
-- [ ] Replace in-memory storage with SQLite/PostgreSQL
-- [ ] Paginated mosaic view
-- [ ] Authenticated sessions & call history
-- [ ] Download mosaic as image
+- [ ] Signup page with dual consent + age gate
+- [ ] Meta Cloud API messaging, webhooks, and media download
+- [ ] Interview state machine (ordered prompts, retries, opt-out)
+- [ ] Transcribe → deterministic hex colour → tile
+- [ ] Delete raw audio after processing
+- [ ] Anonymous public mosaic
 
-### 🎨 Future Fun
-- [ ] Web UI for triggering TTS + calls
-- [ ] Artwork themes (e.g., gradients, pixelation)
-- [ ] Social sharing features
+### 🧪 Later
 
----
+- [ ] Richer audio-driven colour (pitch/loudness) with ffmpeg + meyda
+- [ ] Background queue/worker for processing at volume
+- [ ] Full WhatsApp Business verification + higher messaging tier
+- [ ] Downloadable / shareable mosaic snapshots
 
-## 🛠️ Tech Stack
+### 🐚 Deferred
 
-- **Node.js / Express**
-- **Twilio Programmable Voice**
-- **ElevenLabs Text-to-Speech API**
-- **HTML/CSS Mosaic UI**
-
----
-
-## 🎧 Advanced Audio Color Mapping
-
-We are extending beyond transcript-based colors to analyze the actual audio of responses.
-
-### 🌈 Audio Metrics Used
-
-| Audio Metric         | Mapped To          |
-|----------------------|-------------------|
-| Pitch                | Hue               |
-| Loudness             | Brightness        |
-| Tempo / Speech Rate  | Saturation        |
-| Duration             | Tile size/opacity |
-| Emotion (AI)         | Color palette     |
-
-Using tools like `ffmpeg`, `meyda`, and emotion detection APIs, we can generate truly unique color tiles that represent not just what was said, but how it was said.
-
-📄 See [audio_analysis_for_color.md](audio_analysis_for_color.md) for technical details and implementation roadmap.
-
----
-
-## 💸 Funding & Support
-
-**ManateeCaller** is currently seeking our first wave of **manateeAngel investors** — aquatic-minded patrons who believe in the power of voice, tech, and tenderness.
-
-If you or your organization are interested in supporting:
-- Marine-inspired art-tech hybrids 🐚
-- Peaceful voice-based communication 🌀
-- Cold-calling, color-converting sea cow poetry 📞🎨
-
-Then we’d love to chat. Please reach out via our project contact channels or raise a flipper via GitHub issues.
-
-🪙 *Small ripples make big waves.*
-
+- WhatsApp **voice calls** (requires Meta Calling eligibility + SIP/WebRTC) — revisit only if demand justifies it.
 
 ---
 
