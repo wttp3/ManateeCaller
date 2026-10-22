@@ -3,10 +3,12 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
 import { loadConfig } from "../config/index.js";
+import { resolveMigrationsDir } from "../utils/runtime-paths.js";
+import { pendingMigrationFiles } from "./pending-migrations.js";
 import { getPool, closePool, sql } from "./pool.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const migrationsDir = join(__dirname, "../../migrations");
+const migrationsDir = resolveMigrationsDir(__dirname);
 
 async function migrate(): Promise<void> {
   const config = loadConfig();
@@ -27,15 +29,9 @@ async function migrate(): Promise<void> {
     .query<{ version: string }>("SELECT version FROM schema_migrations");
   const appliedSet = new Set(applied.recordset.map((r: { version: string }) => r.version));
 
-  const files = readdirSync(migrationsDir)
-    .filter((f) => f.endsWith(".sql"))
-    .sort();
+  const pending = pendingMigrationFiles(readdirSync(migrationsDir), appliedSet);
 
-  for (const file of files) {
-    if (appliedSet.has(file)) {
-      continue;
-    }
-
+  for (const file of pending) {
     const sqlText = readFileSync(join(migrationsDir, file), "utf8");
     const batches = sqlText.split(/\nGO\s*\n/i);
 

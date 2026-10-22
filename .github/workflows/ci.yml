@@ -1,22 +1,63 @@
 name: CI
 
+# After tests, package release.tar.gz and upload it as deploy-manateecaller.
+# The tarball root is the PM2 working directory. It has no node_modules and
+# no .env. The host extracts it and runs `npm ci --omit=dev`.
+#
+# Upload runs for pull requests (so the bundle can be inspected) and for
+# pushes to main (the artifact the devops pipeline deploys). Kept 3 days.
+#
+# Do not set NODE_ENV at job level: npm ci would skip devDependencies and
+# the TypeScript build would fail.
+
 on:
   push:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      - name: Build
+        run: npm run build
+      - name: Package deploy artifact
+        if: success()
+        run: |
+          set -euo pipefail
+          bash scripts/package-release.sh "$RUNNER_TEMP/release.tar.gz"
+          echo "release.tar.gz contents:"
+          tar -tzf "$RUNNER_TEMP/release.tar.gz"
+          stage="$RUNNER_TEMP/manateecaller-release"
+          mkdir -p "$stage"
+          tar -xzf "$RUNNER_TEMP/release.tar.gz" -C "$stage"
+          test ! -e "$stage/.env"
+          test ! -d "$stage/node_modules"
+          test -f "$stage/ecosystem.config.cjs"
+          node --check "$stage/dist/index.js"
+          node --check "$stage/dist/db/migrate.js"
+          npm ci --omit=dev --prefix "$stage"
+          node --check "$stage/dist/db/migrate.js"
+      - name: Upload deploy artifact
+        if: success() && (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-manateecaller
+          path: ${{ runner.temp }}/release.tar.gz
+          retention-days: 3
+          if-no-files-found: error
 
   secret-scan:
     runs-on: ubuntu-latest

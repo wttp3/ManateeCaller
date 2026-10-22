@@ -1,10 +1,11 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import { join, dirname } from "node:path";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AppConfig } from "./config/index.js";
 import { redactConfig } from "./config/index.js";
+import { resolvePublicDir } from "./utils/runtime-paths.js";
 import { ParticipantService } from "./services/participant.service.js";
 import { ArtworkService } from "./services/participant.service.js";
 import { InterviewService } from "./services/interview.service.js";
@@ -13,6 +14,7 @@ import { WhatsAppService } from "./services/whatsapp.service.js";
 import { logError } from "./utils/logger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const publicDir = resolvePublicDir(__dirname);
 
 export function createApp(config: AppConfig): Express {
   const app = express();
@@ -36,7 +38,7 @@ export function createApp(config: AppConfig): Express {
     res.json({ ok: true, config: redactConfig(config) });
   });
 
-  app.use(express.static(join(__dirname, "../../public")));
+  app.use(express.static(publicDir));
 
   app.post(
     "/api/signup",
