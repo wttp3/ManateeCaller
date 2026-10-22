@@ -35,7 +35,12 @@ export function createApp(config: AppConfig): Express {
   );
 
   app.get("/health", (_req, res) => {
-    res.json({ ok: true, config: redactConfig(config) });
+    const sha = process.env.DEPLOY_COMMIT_SHA;
+    res.json({
+      ok: true,
+      sha: sha && sha.length > 0 ? sha : null,
+      config: redactConfig(config),
+    });
   });
 
   app.use(express.static(publicDir));

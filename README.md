@@ -87,7 +87,7 @@ Open `http://localhost:3000` for signup. Point Meta webhooks to `https://<tunnel
 | `GET /api/mosaic` | List anonymous artwork tiles |
 | `POST /api/erasure` | Delete participant data; retain suppression token |
 | `GET/POST /webhook/whatsapp` | Meta webhook verification and inbound messages |
-| `GET /health` | Health check (secrets redacted) |
+| `GET /health` | Health check (secrets redacted). `sha` is `DEPLOY_COMMIT_SHA` when that variable is set |
 
 ---
 
@@ -125,7 +125,7 @@ npm run build
 npm start
 ```
 
-CI runs tests, typecheck, build, and Gitleaks secret scanning on push and pull request. A successful run packs `release.tar.gz` and uploads it as the `deploy-manateecaller` artifact.
+CI runs tests, typecheck, build, and Gitleaks secret scanning on push and pull request. Every run packs `release.tar.gz` and smoke-tests `node dist/index.js` from that tarball. Pushes to main upload it as the `deploy-manateecaller` artifact, kept for 3 days. Pull requests build and verify the same tarball and do not upload it.
 
 ---
 
@@ -140,6 +140,7 @@ Prod runs under PM2. The release root is `/home/bitnami/nodeapps/manateecaller/m
     dist/                       # compiled app (node dist/index.js)
     public/                     # signup and mosaic static files
     migrations/                 # SQL applied by npm run migrate:prod
+    node_modules/               # production dependencies, installed in CI
     package.json
     package-lock.json
     ecosystem.config.cjs        # PM2 app manateecaller, one instance
@@ -148,12 +149,11 @@ Prod runs under PM2. The release root is `/home/bitnami/nodeapps/manateecaller/m
     .env                        # runtime env, never committed
 ```
 
-GitHub Actions uploads one file, `release.tar.gz`, as the artifact `deploy-manateecaller` (3-day retention). The tarball root is that release directory. It does not contain `node_modules` or any `.env` file.
+GitHub Actions on `main` uploads one file, `release.tar.gz`, as the artifact `deploy-manateecaller` (3-day retention). The tarball root is that release directory. CI runs `npm ci --omit=dev` in a staging directory and packs the result, including production `node_modules`. The tarball contains no `.env` file. The host downloads the artifact and extracts it. Install and build stay in CI.
 
 On the server, after extract:
 
 ```bash
-npm ci --omit=dev
 npm run migrate:prod
 pm2 start ecosystem.config.cjs --only manateecaller
 ```

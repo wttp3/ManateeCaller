@@ -1,30 +1,42 @@
 #!/usr/bin/env bash
-# Pack the deploy artifact. The tarball root is the PM2 working directory.
-# The host extracts it and runs `npm ci --omit=dev` (no node_modules here).
+# Pack a staged release tree into release.tar.gz.
+# The stage directory must already contain production node_modules
+# (`npm ci --omit=dev`). The host extracts this tarball and does not install.
+# Refuses any .env file. node_modules is part of the release.
 set -euo pipefail
 
-root="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$root"
+out="${1:?output tarball}"
+stage="${2:?stage directory}"
 
-test -f dist/index.js
-test -f dist/db/migrate.js
-test -d public
-test -d migrations
-test -f package.json
-test -f package-lock.json
-test -f ecosystem.config.cjs
+test -f "$stage/dist/index.js"
+test -f "$stage/dist/db/migrate.js"
+test -d "$stage/public"
+test -d "$stage/migrations"
+test -f "$stage/package.json"
+test -f "$stage/package-lock.json"
+test -f "$stage/ecosystem.config.cjs"
+test -d "$stage/node_modules"
+test ! -e "$stage/.env"
+test ! -e "$stage/.env.local"
 
-out="${1:-$root/release.tar.gz}"
-tar -czf "$out" \
+tar -czf "$out" -C "$stage" \
   dist \
   public \
   migrations \
   package.json \
   package-lock.json \
-  ecosystem.config.cjs
+  ecosystem.config.cjs \
+  node_modules
 
-# Refuse a pack that picked up env files or installed modules.
-if tar -tzf "$out" | grep -E '(^|/)\.env($|\.)|(^|/)node_modules/' >/dev/null; then
-  echo "release tarball must not contain .env or node_modules" >&2
+# grep -c reads the full listing. grep -q would SIGPIPE tar under pipefail
+# and look like a missing node_modules tree.
+module_entries="$(tar -tzf "$out" | grep -c '^node_modules/' || true)"
+if [ "${module_entries}" -lt 1 ]; then
+  echo "release tarball must include production node_modules" >&2
+  exit 1
+fi
+
+if tar -tzf "$out" | grep -E '(^|/)\.env($|\.)' >/dev/null; then
+  echo "release tarball must not contain .env" >&2
   exit 1
 fi

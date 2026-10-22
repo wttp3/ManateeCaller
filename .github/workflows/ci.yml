@@ -1,11 +1,12 @@
 name: CI
 
 # After tests, package release.tar.gz and upload it as deploy-manateecaller.
-# The tarball root is the PM2 working directory. It has no node_modules and
-# no .env. The host extracts it and runs `npm ci --omit=dev`.
+# The host downloads that artifact. It does not npm ci or build.
+# Production node_modules are installed in a staging directory and packed
+# into the tarball. The tarball never contains .env.
 #
-# Upload runs for pull requests (so the bundle can be inspected) and for
-# pushes to main (the artifact the devops pipeline deploys). Kept 3 days.
+# The upload runs only for pushes to main, and is kept for 3 days. Pull
+# requests still build, verify and package, but do not upload.
 #
 # Do not set NODE_ENV at job level: npm ci would skip devDependencies and
 # the TypeScript build would fail.
@@ -37,21 +38,95 @@ jobs:
         if: success()
         run: |
           set -euo pipefail
-          bash scripts/package-release.sh "$RUNNER_TEMP/release.tar.gz"
-          echo "release.tar.gz contents:"
-          tar -tzf "$RUNNER_TEMP/release.tar.gz"
-          stage="$RUNNER_TEMP/manateecaller-release"
+          stage="$RUNNER_TEMP/manateecaller-stage"
+          extract="$RUNNER_TEMP/manateecaller-release"
+          tarball="$RUNNER_TEMP/release.tar.gz"
+          rm -rf "$stage" "$extract"
           mkdir -p "$stage"
-          tar -xzf "$RUNNER_TEMP/release.tar.gz" -C "$stage"
-          test ! -e "$stage/.env"
-          test ! -d "$stage/node_modules"
-          test -f "$stage/ecosystem.config.cjs"
-          node --check "$stage/dist/index.js"
-          node --check "$stage/dist/db/migrate.js"
+          cp -a dist public migrations package.json package-lock.json ecosystem.config.cjs "$stage/"
           npm ci --omit=dev --prefix "$stage"
-          node --check "$stage/dist/db/migrate.js"
+          bash scripts/package-release.sh "$tarball" "$stage"
+
+          echo "ARTIFACT_SIZE_BYTES=$(wc -c < "$tarball" | tr -d ' ')"
+          echo "ARTIFACT_TOP_LEVEL:"
+          tar -tzf "$tarball" | awk -F/ 'NF == 1 || (NF == 2 && $2 == "") { print }' | sort -u
+
+          mkdir -p "$extract"
+          tar -xzf "$tarball" -C "$extract"
+          test -d "$extract/node_modules"
+          test ! -e "$extract/.env"
+          test -f "$extract/dist/index.js"
+          test -f "$extract/ecosystem.config.cjs"
+
+          smoke_log="$RUNNER_TEMP/smoke.log"
+          smoke_pid="$RUNNER_TEMP/smoke.pid"
+          cleanup() {
+            if [ -f "$smoke_pid" ]; then
+              kill "$(cat "$smoke_pid")" 2>/dev/null || true
+              wait "$(cat "$smoke_pid")" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          hex() { node -e "process.stdout.write(String(process.argv[1]).repeat(32))" "$1"; }
+          (
+            cd "$extract"
+            export NODE_ENV=production
+            export PORT=3999
+            export PUBLIC_BASE_URL=http://127.0.0.1:3999
+            export DATABASE_URL='Server=127.0.0.1,1433;Database=ManateeCaller;User Id=smoke;Password=smoke-only;TrustServerCertificate=true;Connection Timeout=1'
+            export WHATSAPP_PHONE_NUMBER_ID=smoke
+            export WHATSAPP_BUSINESS_ACCOUNT_ID=smoke
+            export WHATSAPP_ACCESS_TOKEN=smoke-token
+            export WHATSAPP_APP_SECRET=smoke-secret
+            export WHATSAPP_WEBHOOK_VERIFY_TOKEN=smoke-verify
+            export WHATSAPP_TEMPLATE_NAME=manatee_invite
+            export ELEVENLABS_API_KEY=smoke-eleven
+            export DATA_ENCRYPTION_KEY="$(hex ab)"
+            export TILE_HMAC_KEY="$(hex cd)"
+            export LOOKUP_HMAC_KEY="$(hex ef)"
+            export DEPLOY_COMMIT_SHA="${GITHUB_SHA}"
+            export JOB_POLL_INTERVAL_MS=60000
+            node dist/index.js
+          ) >"$smoke_log" 2>&1 &
+          echo $! > "$smoke_pid"
+
+          ok=0
+          for _ in $(seq 1 40); do
+            if curl -sf "http://127.0.0.1:3999/health" -o "$RUNNER_TEMP/health.json"; then
+              ok=1
+              break
+            fi
+            if ! kill -0 "$(cat "$smoke_pid")" 2>/dev/null; then
+              echo "smoke server exited early"
+              cat "$smoke_log"
+              exit 1
+            fi
+            sleep 0.25
+          done
+          if [ "$ok" != 1 ]; then
+            echo "health check did not respond"
+            cat "$smoke_log"
+            exit 1
+          fi
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const body = JSON.parse(readFileSync(process.argv[1], "utf8"));
+            if (body.ok !== true || body.sha !== process.argv[2]) {
+              console.error(JSON.stringify(body));
+              process.exit(1);
+            }
+            console.log("health sha ok");
+          ' "$RUNNER_TEMP/health.json" "$GITHUB_SHA"
+
+          sleep 2
+          if ! kill -0 "$(cat "$smoke_pid")" 2>/dev/null; then
+            echo "smoke server crashed after health check"
+            cat "$smoke_log"
+            exit 1
+          fi
       - name: Upload deploy artifact
-        if: success() && (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: deploy-manateecaller
