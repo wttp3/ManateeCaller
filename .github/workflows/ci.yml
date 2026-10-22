@@ -86,6 +86,7 @@ jobs:
             export TILE_HMAC_KEY="$(hex cd)"
             export LOOKUP_HMAC_KEY="$(hex ef)"
             export DEPLOY_COMMIT_SHA="${GITHUB_SHA}"
+            export DEPLOY_SMOKE_MODE=1
             export JOB_POLL_INTERVAL_MS=60000
             node dist/index.js
           ) >"$smoke_log" 2>&1 &

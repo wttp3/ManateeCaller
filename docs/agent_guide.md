@@ -2,7 +2,11 @@
 
 Use a warm, calm tone — like a tide lapping at the mangroves.
 
-## Invitation template (Meta-approved)
+## Phase 1 pilot
+
+There is no approved `manatee_invite` template. A colleague opts in by sending the keyword (default **I'm in**) to the existing WhatsApp number. That message opens the customer-service window. Reply with the free-form session messages only. Template invites stay behind `WHATSAPP_TEMPLATE_INVITES_ENABLED`, which is off by default. Only numbers in `PILOT_ALLOWED_SENDERS` are answered.
+
+## Invitation template (only when template invites are enabled)
 
 > Hi {{1}}, this is ManateeCaller — a small opt-in art experiment for manatee lovers. Tap **I'm in** to begin a short voice-note interview on WhatsApp. Reply STOP any time to opt out.
 

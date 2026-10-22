@@ -3,7 +3,6 @@ import { sql, getPool } from "../db/pool.js";
 import { encryptString } from "../utils/crypto.js";
 import {
   PROMPTS,
-  nextStateAfterOptIn,
   stateAfterIntroSent,
   stateAfterVoiceAnswer,
   promptForState,
@@ -15,6 +14,10 @@ import { WhatsAppService } from "./whatsapp.service.js";
 import { ElevenLabsService } from "./elevenlabs.service.js";
 import { ArtworkService } from "./participant.service.js";
 import { JobService } from "./job.service.js";
+import { INBOUND_IGNORED_MESSAGE, isPilotSenderAllowed, maskPhone } from "../pilot/allowlist.js";
+import { isOptInMessage } from "../pilot/opt-in.js";
+import { normalizePhone } from "../utils/phone.js";
+import { logInfo } from "../utils/logger.js";
 
 export class InterviewService {
   private readonly participants: ParticipantService;
@@ -39,27 +42,42 @@ export class InterviewService {
     mediaId?: string;
     messageId: string;
   }): Promise<void> {
-    const lookupHash = this.participants.phoneLookupHash(input.from);
-    const participant = await this.participants.getParticipantByLookup(lookupHash);
-    if (!participant || participant.status !== "active") {
+    const phone = normalizePhone(input.from);
+    if (!isPilotSenderAllowed(phone, this.config.pilotAllowedSenders)) {
+      logInfo(INBOUND_IGNORED_MESSAGE, { from: maskPhone(phone) });
       return;
     }
 
-    const phone = this.whatsapp.decryptPhone(participant.encryptedPhone);
+    const lookupHash = this.participants.phoneLookupHash(phone);
+    const participant = await this.participants.getParticipantByLookup(lookupHash);
+    if (!participant || participant.status !== "active") {
+      if (!participant && isOptInMessage(input, this.config.optInKeyword)) {
+        await this.startKeywordOptIn(phone);
+      }
+      return;
+    }
+
+    const storedPhone = this.whatsapp.decryptPhone(participant.encryptedPhone);
     const session = await this.getActiveSession(participant.id);
     if (!session) {
       return;
     }
 
     if (this.isStopMessage(input)) {
-      await this.handleOptOut(participant.id, phone, lookupHash);
+      await this.handleOptOut(participant.id, storedPhone, lookupHash);
       return;
     }
 
     await this.touchServiceWindow(session.id);
 
-    if (input.buttonReplyId === "IM_IN" || input.text?.trim().toLowerCase() === "i'm in") {
-      await this.handleOptIn(session, phone);
+    if (isOptInMessage(input, this.config.optInKeyword)) {
+      if (
+        session.state === "pending_invite" ||
+        session.state === "invited" ||
+        session.state === "awaiting_opt_in"
+      ) {
+        await this.handleOptIn(session, storedPhone);
+      }
       return;
     }
 
@@ -74,7 +92,7 @@ export class InterviewService {
     }
 
     if (session.state.startsWith("awaiting_voice")) {
-      await this.whatsapp.sendText(phone, PROMPTS.wrongMedia);
+      await this.whatsapp.sendText(storedPhone, PROMPTS.wrongMedia);
     }
   }
 
@@ -188,6 +206,14 @@ export class InterviewService {
 
       try {
         if (row.message_type === "template_invite") {
+          if (!this.config.whatsappTemplateInvitesEnabled) {
+            await pool
+              .request()
+              .input("id", sql.UniqueIdentifier, row.id)
+              .query(`UPDATE outbox_messages SET status = 'skipped' WHERE id = @id`);
+            logInfo("Skipping WhatsApp template invite because template invites are disabled");
+            continue;
+          }
           await this.whatsapp.sendTemplate(phone, payload.templateName ?? this.config.whatsappTemplateName);
         }
 
@@ -250,11 +276,26 @@ export class InterviewService {
       `);
   }
 
+  private async startKeywordOptIn(phone: string): Promise<void> {
+    const lookupHash = this.participants.phoneLookupHash(phone);
+    if (await this.participants.isSuppressed(lookupHash)) {
+      logInfo("Ignoring opt-in keyword from a suppressed number", { from: maskPhone(phone) });
+      return;
+    }
+    const created = await this.participants.createFromKeyword(phone);
+    await this.handleOptIn({ id: created.sessionId, state: "awaiting_opt_in" }, phone);
+  }
+
   private async handleOptIn(
     session: { id: string; state: InterviewState },
     phone: string,
   ): Promise<void> {
-    const next = nextStateAfterOptIn(session.state);
+    await this.whatsapp.sendText(phone, PROMPTS.intro);
+    const firstQuestion = promptForState(stateAfterIntroSent());
+    if (firstQuestion) {
+      await this.whatsapp.sendText(phone, firstQuestion);
+    }
+
     const pool = await getPool(this.config);
     await pool
       .request()
@@ -263,13 +304,6 @@ export class InterviewService {
       .query(`
         UPDATE interview_sessions SET state = @state, updated_at = SYSUTCDATETIME() WHERE id = @id
       `);
-
-    await this.whatsapp.sendText(phone, PROMPTS.intro);
-    const firstQuestion = promptForState(stateAfterIntroSent());
-    if (firstQuestion) {
-      await this.whatsapp.sendText(phone, firstQuestion);
-    }
-    void next;
   }
 
   private async handleOptOut(participantId: string, phone: string, lookupHash: string): Promise<void> {

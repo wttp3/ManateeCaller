@@ -6,6 +6,6 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
   },
   esbuild: {
-    target: "node18",
+    target: "node22",
   },
 });

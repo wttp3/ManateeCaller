@@ -11,7 +11,9 @@ import { ArtworkService } from "./services/participant.service.js";
 import { InterviewService } from "./services/interview.service.js";
 import { JobService } from "./services/job.service.js";
 import { WhatsAppService } from "./services/whatsapp.service.js";
-import { logError } from "./utils/logger.js";
+import { INBOUND_IGNORED_MESSAGE, isPilotSenderAllowed, maskPhone } from "./pilot/allowlist.js";
+import { normalizePhone } from "./utils/phone.js";
+import { logError, logInfo } from "./utils/logger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const publicDir = resolvePublicDir(__dirname);
@@ -69,7 +71,13 @@ export function createApp(config: AppConfig): Express {
           ageConfirmed: Boolean(body.ageConfirmed),
         });
 
-        res.status(201).json({ ok: true, sessionId: result.sessionId, participantId: result.participantId });
+        res.status(201).json({
+          ok: true,
+          sessionId: result.sessionId,
+          participantId: result.participantId,
+          delivery: config.whatsappTemplateInvitesEnabled ? "template" : "keyword",
+          optInKeyword: config.optInKeyword,
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Signup failed";
         res.status(400).json({ ok: false, error: message });
@@ -150,6 +158,12 @@ export function createApp(config: AppConfig): Express {
         for (const entry of payload.entry ?? []) {
           for (const change of entry.changes ?? []) {
             for (const message of change.value?.messages ?? []) {
+              const from = normalizePhone(typeof message.from === "string" ? message.from : "");
+              if (!isPilotSenderAllowed(from, config.pilotAllowedSenders)) {
+                logInfo(INBOUND_IGNORED_MESSAGE, { from: maskPhone(from) });
+                continue;
+              }
+
               const eventKey = `msg:${message.id}`;
               const isNew = await jobs.recordWebhook(eventKey, message);
               if (!isNew) {
@@ -157,7 +171,7 @@ export function createApp(config: AppConfig): Express {
               }
 
               await interview.handleInboundMessage({
-                from: `+${message.from}`,
+                from,
                 type: message.type,
                 text: message.text?.body,
                 buttonReplyId:

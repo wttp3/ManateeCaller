@@ -1,6 +1,13 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { AppConfig } from "../config/index.js";
+import {
+  OUTBOUND_REFUSED_MESSAGE,
+  PilotSendRefusedError,
+  isPilotSenderAllowed,
+  maskPhone,
+} from "../pilot/allowlist.js";
 import { decryptString } from "../utils/crypto.js";
+import { logInfo } from "../utils/logger.js";
 
 export class WhatsAppService {
   constructor(private readonly config: AppConfig) {}
@@ -99,6 +106,7 @@ export class WhatsAppService {
   }
 
   private async postMessage(payload: Record<string, unknown>): Promise<void> {
+    this.assertRecipientAllowed(payload.to);
     const response = await fetch(`${this.baseUrl()}/messages`, {
       method: "POST",
       headers: {
@@ -110,6 +118,16 @@ export class WhatsAppService {
     if (!response.ok) {
       const text = await response.text();
       throw new Error(`WhatsApp send failed: ${response.status} ${text.slice(0, 200)}`);
+    }
+  }
+
+  /** Hard guard: no WhatsApp send leaves the process for a number outside the pilot allowlist. */
+  private assertRecipientAllowed(to: unknown): void {
+    if (typeof to !== "string" || !isPilotSenderAllowed(to, this.config.pilotAllowedSenders)) {
+      logInfo(OUTBOUND_REFUSED_MESSAGE, {
+        to: typeof to === "string" ? maskPhone(to) : "••••",
+      });
+      throw new PilotSendRefusedError();
     }
   }
 }

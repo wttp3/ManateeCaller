@@ -17,8 +17,8 @@
 
 ## How It Works
 
-1. **Sign up** at `/` with name, WhatsApp number, 18+ confirmation, privacy notice, and dual consent.
-2. **Invitation** — one approved WhatsApp template with an `I'm in` reply opens the service window.
+1. **Sign up** at `/` with name, WhatsApp number, 18+ confirmation, privacy notice, and dual consent. Signup does not send a WhatsApp template.
+2. **Opt in on WhatsApp** — the colleague messages the keyword (default `I'm in`) to the existing number. That opens the 24-hour customer-service window. ManateeCaller records consent, starts the session, and replies with free-form messages only.
 3. **Interview** — three short questions, each answered with a voice note.
 4. **Voice → colour** — ElevenLabs transcribes each note; when all three are in, transcripts are combined and mapped to a colour via `HMAC-SHA-256`. Raw audio and transcripts are then deleted.
 5. **Mosaic** — one anonymous tile appears at `/mosaic.html` (colour only).
@@ -38,7 +38,7 @@
 
 ### Requirements
 
-- Node.js 18+
+- Node.js 22 (`package.json` `engines.node` is `>=22 <23`)
 - SQL Server (local Docker compose included)
 - Meta WhatsApp Business app test number
 - ElevenLabs API key
@@ -83,7 +83,7 @@ Open `http://localhost:3000` for signup. Point Meta webhooks to `https://<tunnel
 
 | Endpoint | Description |
 |---|---|
-| `POST /api/signup` | Create participant, record consents, queue WhatsApp invite |
+| `POST /api/signup` | Create participant and record consents. Does not send a template unless `WHATSAPP_TEMPLATE_INVITES_ENABLED=true` |
 | `GET /api/mosaic` | List anonymous artwork tiles |
 | `POST /api/erasure` | Delete participant data; retain suppression token |
 | `GET/POST /webhook/whatsapp` | Meta webhook verification and inbound messages |
@@ -105,9 +105,18 @@ See [`public/privacy.html`](public/privacy.html).
 
 ---
 
+## Phase 1 internal pilot
+
+Colleagues who have opted in message an existing WhatsApp Cloud API number. There is no approved `manatee_invite` template, so the app does not depend on sending one.
+
+- `OPT_IN_KEYWORD` (default `I'm in`) starts consent and the session with free-form replies.
+- `PILOT_ALLOWED_SENDERS` is a comma-separated E.164 allowlist. Inbound messages from other numbers are ignored and logged with the number masked. Outbound sends to other numbers are refused in code. An empty list allows nobody.
+- `WHATSAPP_TEMPLATE_INVITES_ENABLED` defaults to `false`. The template outbox path runs only when this is `true`.
+- `DEPLOY_SMOKE_MODE` or `DISABLE_BACKGROUND_JOBS` stops the background worker from polling. Leave both unset in normal operation. The deploy smoke test sets `DEPLOY_SMOKE_MODE=1`.
+
 ## Meta template
 
-Create and approve a WhatsApp template named `manatee_invite` (or set `WHATSAPP_TEMPLATE_NAME`) that:
+Template invites are off by default. When a template is approved, set `WHATSAPP_TEMPLATE_INVITES_ENABLED=true` and create a template named `manatee_invite` (or set `WHATSAPP_TEMPLATE_NAME`) that:
 
 - Identifies **ManateeCaller**
 - Explains the voice-note interview
@@ -125,7 +134,7 @@ npm run build
 npm start
 ```
 
-CI runs tests, typecheck, build, and Gitleaks secret scanning on push and pull request. Every run packs `release.tar.gz` and smoke-tests `node dist/index.js` from that tarball. Pushes to main upload it as the `deploy-manateecaller` artifact, kept for 3 days. Pull requests build and verify the same tarball and do not upload it.
+CI runs tests, typecheck, build, and Gitleaks secret scanning on push and pull request. Every run packs `release.tar.gz` and smoke-tests `node dist/index.js` from that tarball with `DEPLOY_SMOKE_MODE=1`, so the background worker does not poll. Pushes to main upload it as the `deploy-manateecaller` artifact, kept for 3 days. Pull requests build and verify the same tarball and do not upload it.
 
 ---
 
@@ -192,6 +201,11 @@ Optional (the process starts without them; `NODE_ENV` is already `production` in
 - `MAX_VOICE_NOTE_SECONDS`
 - `TEMP_AUDIO_DIR`
 - `JOB_POLL_INTERVAL_MS`
+- `WHATSAPP_TEMPLATE_INVITES_ENABLED` (default `false`)
+- `OPT_IN_KEYWORD` (default `I'm in`)
+- `PILOT_ALLOWED_SENDERS` (default empty — nobody is allowed)
+- `DEPLOY_SMOKE_MODE` (set to stop background polling)
+- `DISABLE_BACKGROUND_JOBS` (set to stop background polling)
 
 ---
 

@@ -3,6 +3,7 @@ import { sql, getPool } from "../db/pool.js";
 import { decryptString, encryptString, hmacHex, randomSlug } from "../utils/crypto.js";
 import { combineTranscripts, transcriptToColor } from "../utils/color.js";
 import { CONSENT_TEXT_VERSION } from "../interview/constants.js";
+import { isPilotSenderAllowed } from "../pilot/allowlist.js";
 import { normalizePhone, isValidE164 } from "../utils/phone.js";
 
 export class ParticipantService {
@@ -66,17 +67,7 @@ export class ParticipantService {
         `);
 
       const participantId = participantResult.recordset[0].id as string;
-
-      for (const consentType of ["whatsapp_contact", "voice_processing", "privacy_notice"] as const) {
-        await new sql.Request(transaction)
-          .input("participant_id", sql.UniqueIdentifier, participantId)
-          .input("consent_type", sql.NVarChar(64), consentType)
-          .input("consent_text_version", sql.NVarChar(32), CONSENT_TEXT_VERSION)
-          .query(`
-            INSERT INTO consents (participant_id, consent_type, consent_text_version)
-            VALUES (@participant_id, @consent_type, @consent_text_version)
-          `);
-      }
+      await this.insertConsents(transaction, participantId);
 
       const sessionResult = await new sql.Request(transaction)
         .input("participant_id", sql.UniqueIdentifier, participantId)
@@ -88,24 +79,92 @@ export class ParticipantService {
 
       const sessionId = sessionResult.recordset[0].id as string;
 
-      await new sql.Request(transaction)
-        .input("participant_id", sql.UniqueIdentifier, participantId)
-        .input("message_type", sql.NVarChar(64), "template_invite")
-        .input(
-          "payload_json",
-          sql.NVarChar(sql.MAX),
-          JSON.stringify({ templateName: this.config.whatsappTemplateName }),
-        )
-        .query(`
-          INSERT INTO outbox_messages (participant_id, message_type, payload_json)
-          VALUES (@participant_id, @message_type, @payload_json)
-        `);
+      if (this.config.whatsappTemplateInvitesEnabled) {
+        await new sql.Request(transaction)
+          .input("participant_id", sql.UniqueIdentifier, participantId)
+          .input("message_type", sql.NVarChar(64), "template_invite")
+          .input(
+            "payload_json",
+            sql.NVarChar(sql.MAX),
+            JSON.stringify({ templateName: this.config.whatsappTemplateName }),
+          )
+          .query(`
+            INSERT INTO outbox_messages (participant_id, message_type, payload_json)
+            VALUES (@participant_id, @message_type, @payload_json)
+          `);
+      }
 
       await transaction.commit();
       return { participantId, sessionId };
     } catch (err) {
       await transaction.rollback();
       throw err;
+    }
+  }
+
+  /**
+   * Message-first opt-in. Records consent and opens a session. Does not queue a template.
+   */
+  async createFromKeyword(phone: string): Promise<{ participantId: string; sessionId: string }> {
+    const normalized = normalizePhone(phone);
+    if (!isValidE164(normalized)) {
+      throw new Error("Invalid WhatsApp number");
+    }
+    if (!isPilotSenderAllowed(normalized, this.config.pilotAllowedSenders)) {
+      throw new Error("This number is not on the pilot allowlist");
+    }
+
+    const lookupHash = this.phoneLookupHash(normalized);
+    if (await this.isSuppressed(lookupHash)) {
+      throw new Error("This number cannot be enrolled");
+    }
+
+    const pool = await getPool(this.config);
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    try {
+      const participantResult = await new sql.Request(transaction)
+        .input("encrypted_phone", sql.NVarChar(512), encryptString(normalized, this.config.dataEncryptionKey))
+        .input("phone_lookup_hash", sql.Char(64), lookupHash)
+        .input("encrypted_name", sql.NVarChar(512), encryptString("", this.config.dataEncryptionKey))
+        .query(`
+          INSERT INTO participants (encrypted_phone, phone_lookup_hash, encrypted_name)
+          OUTPUT INSERTED.id
+          VALUES (@encrypted_phone, @phone_lookup_hash, @encrypted_name)
+        `);
+
+      const participantId = participantResult.recordset[0].id as string;
+      await this.insertConsents(transaction, participantId);
+
+      const sessionResult = await new sql.Request(transaction)
+        .input("participant_id", sql.UniqueIdentifier, participantId)
+        .input("hours", sql.Int, this.config.sessionTimeoutHours)
+        .query(`
+          INSERT INTO interview_sessions (participant_id, state, service_window_expires_at)
+          OUTPUT INSERTED.id
+          VALUES (@participant_id, 'awaiting_opt_in', DATEADD(hour, @hours, SYSUTCDATETIME()))
+        `);
+
+      const sessionId = sessionResult.recordset[0].id as string;
+      await transaction.commit();
+      return { participantId, sessionId };
+    } catch (err) {
+      await transaction.rollback();
+      throw err;
+    }
+  }
+
+  private async insertConsents(transaction: sql.Transaction, participantId: string): Promise<void> {
+    for (const consentType of ["whatsapp_contact", "voice_processing", "privacy_notice"] as const) {
+      await new sql.Request(transaction)
+        .input("participant_id", sql.UniqueIdentifier, participantId)
+        .input("consent_type", sql.NVarChar(64), consentType)
+        .input("consent_text_version", sql.NVarChar(32), CONSENT_TEXT_VERSION)
+        .query(`
+          INSERT INTO consents (participant_id, consent_type, consent_text_version)
+          VALUES (@participant_id, @consent_type, @consent_text_version)
+        `);
     }
   }
 
