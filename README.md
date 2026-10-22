@@ -103,7 +103,7 @@ Colleagues should read [`public/privacy.html`](public/privacy.html). The notice 
 - Transcripts stay encrypted until the tile is saved, then they are cleared. If no tile is saved, they stay until `DELETE MY DATA`.
 - The colour tile has no expiry. Erasure removes the link to the person and leaves the colour on the mosaic.
 - `STOP` (also `unsubscribe`, `cancel`, and `opt out`) opts out and leaves the record in place. `ERASURE_KEYWORD` (default `DELETE MY DATA`) deletes the sender's rows. A keyed hash and compliance notes remain after erasure. The notes are a record of each STOP and each erasure. Hosting location for our own copy is still to be confirmed.
-- ElevenLabs zero retention defaults to off (`ELEVENLABS_ENABLE_ZERO_RETENTION`). While it is off, the notice says audio may be kept under ElevenLabs' standard privacy policy.
+- ElevenLabs zero retention defaults to off (`ELEVENLABS_ENABLE_ZERO_RETENTION`). While it is off, the notice says any copy is kept under ElevenLabs' DPA (`https://elevenlabs.io/dpa`). ElevenLabs is our processor for that audio.
 
 ---
 

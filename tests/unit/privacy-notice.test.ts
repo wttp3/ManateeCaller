@@ -20,7 +20,11 @@ describe("pilot privacy notice", () => {
     expect(privacy).toContain("STOP");
     expect(privacy).toContain("DELETE MY DATA");
     expect(privacy).toContain("hello@manateecaller.net");
-    expect(privacy).toContain("https://elevenlabs.io/privacy");
+    expect(privacy).toContain("https://elevenlabs.io/dpa");
+    expect(privacy).toContain("any copy is kept under");
+    expect(privacy).toContain("ElevenLabs' DPA");
+    expect(privacy).not.toContain("standard privacy policy");
+    expect(privacy).not.toContain("https://elevenlabs.io/privacy");
     expect(privacy).toContain("https://ico.org.uk/make-a-complaint/");
     expect(privacy).toContain("Zero retention is off by default");
     expect(privacy).toContain("still to be confirmed");
@@ -36,8 +40,10 @@ describe("pilot privacy notice", () => {
     expect(privacy).toContain("https://elevenlabs.io/dpa");
     expect(privacy).toContain("https://elevenlabs.io/terms-of-use-eu");
     expect(privacy).toContain("data bridge");
-    expect(privacy).toContain("IDTA");
-    expect(privacy).toContain("Standard Contractual Clauses");
+    expect(privacy).toContain(
+      "EU Standard Contractual Clauses with the UK International Data Transfer Addendum",
+    );
+    expect(privacy).not.toContain("IDTA");
     expect(privacy).toContain("legitimate interests");
     expect(privacy).toContain("object");
     expect(privacy).toContain("access");
