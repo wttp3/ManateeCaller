@@ -1,8 +1,14 @@
 import { hostname } from "node:os";
 import type { AppConfig } from "../config/index.js";
+import { isEnvFlagSet } from "../pilot/allowlist.js";
 import { JobService } from "../services/job.service.js";
 import { InterviewService } from "../services/interview.service.js";
 import { logError, logInfo } from "../utils/logger.js";
+
+/** Smoke deploys and one-off runs set these so the process can boot without polling SQL. */
+export function backgroundJobsDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isEnvFlagSet(env.DEPLOY_SMOKE_MODE) || isEnvFlagSet(env.DISABLE_BACKGROUND_JOBS);
+}
 
 export class JobWorker {
   private readonly jobs: JobService;
@@ -16,6 +22,16 @@ export class JobWorker {
   }
 
   start(): void {
+    if (backgroundJobsDisabled()) {
+      logInfo("Background worker polling disabled", {
+        deploySmokeMode: isEnvFlagSet(process.env.DEPLOY_SMOKE_MODE),
+        disableBackgroundJobs: isEnvFlagSet(process.env.DISABLE_BACKGROUND_JOBS),
+      });
+      return;
+    }
+    if (this.timer) {
+      return;
+    }
     this.timer = setInterval(() => {
       void this.tick();
     }, this.config.jobPollIntervalMs);
@@ -29,10 +45,20 @@ export class JobWorker {
     }
   }
 
+  isPolling(): boolean {
+    return this.timer !== null;
+  }
+
   private async tick(): Promise<void> {
     try {
       await this.interview.processOutbox();
+    } catch (err) {
+      logError("Outbox processing failed", {
+        error: err instanceof Error ? err.message : "unknown",
+      });
+    }
 
+    try {
       for (;;) {
         const job = await this.jobs.claimNext(this.workerId);
         if (!job) {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parsePilotAllowlist } from "../pilot/allowlist.js";
 
 const hexKey = z
   .string()
@@ -16,7 +17,46 @@ const configSchema = z.object({
   whatsappAppSecret: z.string().min(1),
   whatsappWebhookVerifyToken: z.string().min(1),
   whatsappTemplateName: z.string().min(1),
+  whatsappTemplateInvitesEnabled: z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      if (value === undefined || value.trim() === "") {
+        return false;
+      }
+      const normalized = value.trim().toLowerCase();
+      if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") {
+        return true;
+      }
+      if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off") {
+        return false;
+      }
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "must be true or false" });
+      return z.NEVER;
+    }),
   whatsappApiVersion: z.string().default("v22.0"),
+  optInKeyword: z
+    .string()
+    .optional()
+    .transform((value) => {
+      const keyword = value?.trim() ?? "";
+      return keyword.length > 0 ? keyword : "I'm in";
+    }),
+  pilotAllowedSenders: z
+    .string()
+    .optional()
+    .default("")
+    .transform((raw, ctx) => {
+      try {
+        return parsePilotAllowlist(raw);
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "must be comma-separated E.164 numbers",
+        });
+        return z.NEVER;
+      }
+    }),
   elevenLabsApiKey: z.string().min(1),
   elevenLabsEnableZeroRetention: z
     .enum(["true", "false"])
@@ -46,7 +86,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     whatsappAppSecret: env.WHATSAPP_APP_SECRET,
     whatsappWebhookVerifyToken: env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
     whatsappTemplateName: env.WHATSAPP_TEMPLATE_NAME,
+    whatsappTemplateInvitesEnabled: env.WHATSAPP_TEMPLATE_INVITES_ENABLED,
     whatsappApiVersion: env.WHATSAPP_API_VERSION,
+    optInKeyword: env.OPT_IN_KEYWORD,
+    pilotAllowedSenders: env.PILOT_ALLOWED_SENDERS,
     elevenLabsApiKey: env.ELEVENLABS_API_KEY,
     elevenLabsEnableZeroRetention: env.ELEVENLABS_ENABLE_ZERO_RETENTION,
     dataEncryptionKey: env.DATA_ENCRYPTION_KEY,
@@ -76,7 +119,10 @@ export function redactConfig(config: AppConfig): Record<string, string | number 
     databaseUrl: "[redacted]",
     whatsappPhoneNumberId: config.whatsappPhoneNumberId,
     whatsappTemplateName: config.whatsappTemplateName,
+    whatsappTemplateInvitesEnabled: config.whatsappTemplateInvitesEnabled,
     whatsappApiVersion: config.whatsappApiVersion,
+    optInKeyword: config.optInKeyword,
+    pilotAllowedSenderCount: config.pilotAllowedSenders.length,
     elevenLabsEnableZeroRetention: config.elevenLabsEnableZeroRetention,
     sessionTimeoutHours: config.sessionTimeoutHours,
     maxVoiceNoteBytes: config.maxVoiceNoteBytes,
