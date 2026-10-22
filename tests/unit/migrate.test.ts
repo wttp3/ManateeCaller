@@ -18,9 +18,31 @@ describe("pendingMigrationFiles", () => {
   it("is idempotent for the shipped migrations", () => {
     const files = readdirSync(join(repoRoot, "migrations"));
     const first = pendingMigrationFiles(files, []);
-    expect(first).toEqual(["001_initial.sql", "002_privacy_controls.sql"]);
+    expect(first).toEqual([
+      "001_initial.sql",
+      "002_privacy_controls.sql",
+      "003_legacy_privacy_backfill.sql",
+    ]);
     expect(pendingMigrationFiles(files, first)).toEqual([]);
     expect(pendingMigrationFiles(files, new Set(first))).toEqual([]);
+  });
+});
+
+describe("legacy privacy backfill", () => {
+  it("links jobs by session id, scrubs phones, and expires unlinkable webhook rows", () => {
+    const sql = readFileSync(join(repoRoot, "migrations/003_legacy_privacy_backfill.sql"), "utf8");
+    expect(sql).toContain("JSON_VALUE(j.payload_json, '$.sessionId')");
+    expect(sql).toContain("'$.phone'");
+    expect(sql).toContain("last_error = NULL");
+    expect(sql).toContain("phone_lookup_hash IS NULL");
+    expect(sql).toContain("DATEADD(day, -7, SYSUTCDATETIME())");
+    expect(sql.toLowerCase()).toContain("cannot be derived");
+  });
+
+  it("matches legacy jobs by session id in stop and erasure", () => {
+    const source = readFileSync(join(repoRoot, "src/services/participant.service.ts"), "utf8");
+    const matches = source.match(/JSON_VALUE\(payload_json, '\$\.sessionId'\)/g) ?? [];
+    expect(matches.length).toBeGreaterThanOrEqual(2);
   });
 });
 

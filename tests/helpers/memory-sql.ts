@@ -60,6 +60,9 @@ export type MemoryJob = {
   payload_json: string;
   participant_id: string | null;
   status: string;
+  attempts?: number;
+  max_attempts?: number;
+  last_error?: string | null;
 };
 
 export type MemoryWebhook = {
@@ -97,6 +100,7 @@ export const memoryDebug = {
 };
 
 let committed: MemoryStore = emptyStore();
+let transactionChain: Promise<void> = Promise.resolve();
 
 function emptyStore(): MemoryStore {
   return {
@@ -120,6 +124,7 @@ function cloneStore(store: MemoryStore): MemoryStore {
 export function resetMemory(): void {
   committed = emptyStore();
   memoryDebug.errors = [];
+  transactionChain = Promise.resolve();
 }
 
 export function memorySnapshot(): MemoryStore {
@@ -145,23 +150,51 @@ function fail(sqlText: string): never {
   throw new Error(message);
 }
 
-function payloadParticipantId(payloadJson: string): string | null {
+function payloadField(payloadJson: string, key: string): string | null {
   try {
-    const payload = JSON.parse(payloadJson) as { participantId?: unknown };
-    return typeof payload.participantId === "string" ? payload.participantId : null;
+    const payload = JSON.parse(payloadJson) as Record<string, unknown>;
+    const value = payload[key];
+    return typeof value === "string" ? value : null;
   } catch {
     return null;
   }
 }
 
+/**
+ * Same ownership rule as the STOP and erasure SQL:
+ * jobs.participant_id, payload participantId, or payload sessionId for this participant.
+ */
+function jobOwnedByParticipant(store: MemoryStore, job: MemoryJob, participantId: string): boolean {
+  if (job.participant_id === participantId) {
+    return true;
+  }
+  if (payloadField(job.payload_json, "participantId") === participantId) {
+    return true;
+  }
+  const sessionId = payloadField(job.payload_json, "sessionId");
+  if (!sessionId) {
+    return false;
+  }
+  return store.sessions.some((session) => session.id === sessionId && session.participant_id === participantId);
+}
+
 function applyStop(inputs: Map<string, unknown>, store: MemoryStore): { recordset: Array<Record<string, unknown>> } {
   const participantId = inputs.get("participant_id");
   const hash = String(inputs.get("lookup_hash") ?? "");
+  let transitioned = false;
+  let windowOpen = false;
   if (typeof participantId === "string" && participantId.length > 0) {
+    windowOpen = store.sessions.some(
+      (session) =>
+        session.participant_id === participantId &&
+        session.service_window_expires_at !== null &&
+        session.service_window_expires_at.getTime() > Date.now(),
+    );
     const participant = store.participants.find((item) => item.id === participantId);
-    if (participant) {
+    if (participant && participant.status !== "opted_out") {
       participant.status = "opted_out";
       participant.updated_at = new Date();
+      transitioned = true;
     }
     for (const session of store.sessions) {
       if (session.participant_id === participantId && session.state !== "complete") {
@@ -179,15 +212,11 @@ function applyStop(inputs: Map<string, unknown>, store: MemoryStore): { recordse
         row.status = "cancelled";
       }
     }
-    const sessionIds = new Set(
-      store.sessions.filter((session) => session.participant_id === participantId).map((session) => session.id),
-    );
     for (const job of store.jobs) {
-      const ownsJob =
-        job.participant_id === participantId ||
-        payloadParticipantId(job.payload_json) === participantId ||
-        sessionIds.has(payloadSessionId(job.payload_json) ?? "");
-      if (ownsJob && (job.status === "pending" || job.status === "processing")) {
+      if (
+        jobOwnedByParticipant(store, job, participantId) &&
+        (job.status === "pending" || job.status === "processing")
+      ) {
         job.status = "cancelled";
         job.payload_json = "{}";
       }
@@ -199,16 +228,9 @@ function applyStop(inputs: Map<string, unknown>, store: MemoryStore): { recordse
   if (hash) {
     store.compliance.push({ phone_lookup_hash: hash, action: "stop_received" });
   }
-  return { recordset: [] };
-}
-
-function payloadSessionId(payloadJson: string): string | null {
-  try {
-    const payload = JSON.parse(payloadJson) as { sessionId?: unknown };
-    return typeof payload.sessionId === "string" ? payload.sessionId : null;
-  } catch {
-    return null;
-  }
+  return {
+    recordset: [{ transitioned: transitioned ? 1 : 0, window_open: windowOpen ? 1 : 0 }],
+  };
 }
 
 function applyErasure(inputs: Map<string, unknown>, store: MemoryStore): { recordset: Array<Record<string, unknown>> } {
@@ -223,9 +245,7 @@ function applyErasure(inputs: Map<string, unknown>, store: MemoryStore): { recor
       tile.session_id = null;
     }
   }
-  store.jobs = store.jobs.filter(
-    (job) => job.participant_id !== participantId && payloadParticipantId(job.payload_json) !== participantId,
-  );
+  store.jobs = store.jobs.filter((job) => !jobOwnedByParticipant(store, job, participantId));
   store.sessions = store.sessions.filter((session) => session.participant_id !== participantId);
   store.consents = store.consents.filter((consent) => consent.participant_id !== participantId);
   store.outbox = store.outbox.filter((row) => row.participant_id !== participantId);
@@ -255,11 +275,54 @@ function execute(
     return applyErasure(inputs, store);
   }
 
+  if (sql.includes("erasure_media_ids")) {
+    const participantId = String(inputs.get("participant_id") ?? "");
+    const mediaIds = new Set<string>();
+    for (const response of store.responses) {
+      const session = store.sessions.find((item) => item.id === response.session_id);
+      if (session?.participant_id === participantId && response.whatsapp_media_id) {
+        mediaIds.add(response.whatsapp_media_id);
+      }
+    }
+    for (const job of store.jobs) {
+      if (!jobOwnedByParticipant(store, job, participantId)) {
+        continue;
+      }
+      const mediaId = payloadField(job.payload_json, "mediaId");
+      if (mediaId) {
+        mediaIds.add(mediaId);
+      }
+    }
+    return { recordset: [...mediaIds].map((mediaId) => ({ media_id: mediaId })) };
+  }
+
+  if (sql.includes("update jobs") && sql.includes("status = 'completed'")) {
+    const job = store.jobs.find((item) => item.id === inputs.get("id"));
+    if (job && (!sql.includes("status = 'processing'") || job.status === "processing")) {
+      job.status = "completed";
+    }
+    return { recordset: [] };
+  }
+
+  if (sql.includes("update jobs") && sql.includes("last_error")) {
+    const job = store.jobs.find((item) => item.id === inputs.get("id"));
+    if (job && (!sql.includes("status = 'processing'") || job.status === "processing")) {
+      const attempts = job.attempts ?? 0;
+      const maxAttempts = job.max_attempts ?? 5;
+      job.status = attempts >= maxAttempts ? "failed" : "pending";
+      job.last_error = String(inputs.get("error") ?? "");
+    }
+    return { recordset: [] };
+  }
+
   if (sql.includes("delete from suppression_tokens")) {
     const hash = String(inputs.get("hash") ?? inputs.get("lookup_hash") ?? "");
     store.suppression = store.suppression.filter((item) => {
       if (item.phone_lookup_hash !== hash) {
         return true;
+      }
+      if (sql.includes("reason in ('stop', 'erasure_request')")) {
+        return item.reason !== "stop" && item.reason !== "erasure_request";
       }
       if (sql.includes("reason = 'stop'")) {
         return item.reason !== "stop";
@@ -489,7 +552,8 @@ function execute(
       }
     }
     const session = store.sessions.find((item) => item.id === sessionId);
-    if (session) {
+    const sticky = session?.state === "opted_out" || session?.state === "expired";
+    if (session && !(sql.includes("not in") && sticky)) {
       session.state = "complete";
       session.completed_at = new Date();
       session.updated_at = new Date();
@@ -570,7 +634,8 @@ function execute(
 
   if (sql.includes("service_window_expires_at = dateadd")) {
     const row = store.sessions.find((session) => session.id === inputs.get("id"));
-    if (row) {
+    const sticky = row?.state === "opted_out" || row?.state === "expired" || row?.state === "complete";
+    if (row && !(sql.includes("not in") && sticky)) {
       row.service_window_expires_at = windowFrom(inputs);
       row.updated_at = new Date();
     }
@@ -598,7 +663,8 @@ function execute(
 
   if (sql.includes("set state = @state")) {
     const row = store.sessions.find((session) => session.id === inputs.get("id"));
-    if (row) {
+    const sticky = row?.state === "opted_out" || row?.state === "expired" || row?.state === "complete";
+    if (row && !(sql.includes("not in") && sticky)) {
       row.state = String(inputs.get("state"));
       if (inputs.has("current_question_index")) {
         row.current_question_index = Number(inputs.get("current_question_index"));
@@ -610,7 +676,7 @@ function execute(
 
   if (sql.includes("status = 'skipped'")) {
     const row = store.outbox.find((item) => item.id === inputs.get("id"));
-    if (row) {
+    if (row && (!sql.includes("status = 'pending'") || row.status === "pending")) {
       row.status = "skipped";
     }
     return { recordset: [] };
@@ -618,7 +684,7 @@ function execute(
 
   if (sql.includes("status = 'sent'")) {
     const row = store.outbox.find((item) => item.id === inputs.get("id"));
-    if (row) {
+    if (row && (!sql.includes("status = 'pending'") || row.status === "pending")) {
       row.status = "sent";
       row.sent_at = new Date();
     }
@@ -627,7 +693,7 @@ function execute(
 
   if (sql.includes("set attempts = @attempts")) {
     const row = store.outbox.find((item) => item.id === inputs.get("id"));
-    if (row) {
+    if (row && (!sql.includes("status = 'pending'") || row.status === "pending")) {
       row.attempts = Number(inputs.get("attempts"));
       const status = inputs.get("status");
       if (typeof status === "string") {
@@ -642,8 +708,17 @@ function execute(
 
 export class FakeTransaction {
   store: MemoryStore | null = null;
+  private release: (() => void) | null = null;
 
   async begin(): Promise<void> {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const previous = transactionChain;
+    transactionChain = gate;
+    await previous;
+    this.release = release;
     this.store = cloneStore(committed);
   }
 
@@ -652,10 +727,18 @@ export class FakeTransaction {
       throw new Error("commit before begin");
     }
     committed = this.store;
+    this.unlock();
   }
 
   async rollback(): Promise<void> {
     this.store = null;
+    this.unlock();
+  }
+
+  private unlock(): void {
+    const release = this.release;
+    this.release = null;
+    release?.();
   }
 }
 

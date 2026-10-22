@@ -13,7 +13,7 @@ import { ParticipantService } from "./participant.service.js";
 import { WhatsAppService } from "./whatsapp.service.js";
 import { ElevenLabsService } from "./elevenlabs.service.js";
 import { ArtworkService } from "./participant.service.js";
-import { JobService } from "./job.service.js";
+import { JobService, sanitiseStoredError } from "./job.service.js";
 import { expiredNoticeBody, isServiceWindowOpen } from "../interview/service-window.js";
 import { INBOUND_IGNORED_MESSAGE, isPilotSenderAllowed, maskPhone } from "../pilot/allowlist.js";
 import { isErasureCommand, isStopCommand } from "../pilot/commands.js";
@@ -108,7 +108,6 @@ export class InterviewService {
         sessionId: session.id,
         participantId: participant.id,
         mediaId: input.mediaId,
-        messageId: input.messageId,
       });
       return;
     }
@@ -294,6 +293,7 @@ export class InterviewService {
         UPDATE interview_sessions
         SET service_window_expires_at = DATEADD(hour, @hours, SYSUTCDATETIME()), updated_at = SYSUTCDATETIME()
         WHERE id = @id
+          AND state NOT IN ('opted_out', 'expired', 'complete')
       `);
   }
 
@@ -302,14 +302,8 @@ export class InterviewService {
     lookupHash: string,
     participant: { id: string; encryptedPhone: string; status: string } | null,
   ): Promise<void> {
-    const suppression = await this.participants.getSuppression(lookupHash);
-    if (suppression?.reason === "erasure_request") {
-      logInfo("Ignoring opt-in keyword from an erased number", { from: maskPhone(phone) });
-      return;
-    }
-
     if (!participant) {
-      await this.participants.clearStopSuppression(lookupHash);
+      await this.participants.clearKeywordSuppression(lookupHash);
       await this.startKeywordOptIn(phone);
       return;
     }
@@ -349,21 +343,22 @@ export class InterviewService {
       .input("id", sql.UniqueIdentifier, session.id)
       .input("state", sql.NVarChar(64), stateAfterIntroSent())
       .query(`
-        UPDATE interview_sessions SET state = @state, updated_at = SYSUTCDATETIME() WHERE id = @id
+        UPDATE interview_sessions
+        SET state = @state, updated_at = SYSUTCDATETIME()
+        WHERE id = @id
+          AND state NOT IN ('opted_out', 'expired', 'complete')
       `);
   }
 
   /**
    * STOP is honoured with or without a session. The confirmation is one free-form
-   * message, so it is sent only while a stored 24-hour window is still open.
-   * A second STOP does not send another confirmation.
+   * message. It is sent only when this call is the one that opts the participant
+   * out and a stored 24-hour window was open in that same transaction.
    */
   private async handleStop(lookupHash: string): Promise<void> {
     const participant = await this.participants.getParticipantByLookup(lookupHash);
-    const windowOpen = participant ? await this.anyServiceWindowOpen(participant.id) : false;
-    const alreadyOptedOut = participant?.status === "opted_out";
-    await this.participants.recordStop(participant?.id ?? null, lookupHash);
-    if (!participant || alreadyOptedOut || !windowOpen) {
+    const { sendConfirmation } = await this.participants.recordStop(participant?.id ?? null, lookupHash);
+    if (!sendConfirmation || !participant) {
       return;
     }
     const storedPhone = this.whatsapp.decryptPhone(participant.encryptedPhone);
@@ -371,9 +366,24 @@ export class InterviewService {
   }
 
   /**
-   * Erasure only runs for the number that sent the keyword. The public participant-id
-   * route is not used here. One confirmation is sent when the window is open.
+   * Erasure only runs for the number that sent the keyword, or for an admin with
+   * the bearer token. Media files are deleted first, best effort. One confirmation
+   * is sent when the window is open.
    */
+  async eraseParticipant(participantId: string): Promise<void> {
+    const mediaIds = await this.participants.listMediaIds(participantId);
+    for (const mediaId of mediaIds) {
+      try {
+        await this.whatsapp.deleteMedia(mediaId);
+      } catch (err) {
+        logError("Failed to delete WhatsApp media during erasure", {
+          error: sanitiseStoredError(err instanceof Error ? err.message : "unknown"),
+        });
+      }
+    }
+    await this.participants.deleteParticipant(participantId);
+  }
+
   private async handleErasure(lookupHash: string): Promise<void> {
     const participant = await this.participants.getParticipantByLookup(lookupHash);
     if (!participant) {
@@ -382,7 +392,7 @@ export class InterviewService {
     }
     const windowOpen = await this.anyServiceWindowOpen(participant.id);
     const storedPhone = this.whatsapp.decryptPhone(participant.encryptedPhone);
-    await this.participants.deleteParticipant(participant.id);
+    await this.eraseParticipant(participant.id);
     if (windowOpen) {
       await this.whatsapp.sendText(storedPhone, PROMPTS.erased, { bypassOptOut: true });
     }
@@ -518,6 +528,7 @@ export class InterviewService {
         UPDATE interview_sessions
         SET state = @state, current_question_index = @current_question_index, updated_at = SYSUTCDATETIME()
         WHERE id = @id
+          AND state NOT IN ('opted_out', 'expired', 'complete')
       `);
   }
 
@@ -548,7 +559,7 @@ export class InterviewService {
         await pool
           .request()
           .input("id", sql.UniqueIdentifier, row.id)
-          .query(`UPDATE outbox_messages SET status = 'skipped' WHERE id = @id`);
+          .query(`UPDATE outbox_messages SET status = 'skipped' WHERE id = @id AND status = 'pending'`);
         logInfo("Skipping WhatsApp template invite because template invites are disabled");
         return;
       }
@@ -559,7 +570,9 @@ export class InterviewService {
       .request()
       .input("id", sql.UniqueIdentifier, row.id)
       .query(`
-        UPDATE outbox_messages SET status = 'sent', sent_at = SYSUTCDATETIME() WHERE id = @id
+        UPDATE outbox_messages
+        SET status = 'sent', sent_at = SYSUTCDATETIME()
+        WHERE id = @id AND status = 'pending'
       `);
 
     await pool
@@ -595,7 +608,7 @@ export class InterviewService {
         .query(`
           UPDATE outbox_messages
           SET attempts = @attempts, status = @status
-          WHERE id = @id
+          WHERE id = @id AND status = 'pending'
         `);
     } catch (updateErr) {
       logError("Failed to record outbox attempt", {

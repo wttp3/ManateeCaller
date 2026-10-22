@@ -253,33 +253,58 @@ export class ParticipantService {
     return reason ? { reason } : null;
   }
 
-  async clearStopSuppression(lookupHash: string): Promise<void> {
+  /**
+   * An inbound opt-in keyword is fresh consent. Clear stop and erasure tokens so
+   * that keyword can start a participant. Template invites stay blocked until then.
+   */
+  async clearKeywordSuppression(lookupHash: string): Promise<void> {
     const pool = await getPool(this.config);
     await pool
       .request()
       .input("hash", sql.Char(64), lookupHash)
       .query(`
         DELETE FROM suppression_tokens
-        WHERE phone_lookup_hash = @hash AND reason = 'stop'
+        WHERE phone_lookup_hash = @hash
+          AND reason IN ('stop', 'erasure_request')
       `);
   }
 
   /**
    * Opt out in every state, including when there is no participant yet.
-   * Pending invites and jobs are cancelled. A later opt-in keyword can clear a stop token.
+   * The status change and the window check run in one transaction. Only the call
+   * that actually moves the participant to opted_out may send a confirmation.
+   * Pending jobs are matched by participant_id or by a legacy sessionId in the payload.
    */
-  async recordStop(participantId: string | null, lookupHash: string): Promise<void> {
+  async recordStop(
+    participantId: string | null,
+    lookupHash: string,
+  ): Promise<{ sendConfirmation: boolean }> {
     const pool = await getPool(this.config);
     const transaction = new sql.Transaction(pool);
     await transaction.begin();
     try {
-      await new sql.Request(transaction)
+      const result = await new sql.Request(transaction)
         .input("participant_id", sql.UniqueIdentifier, participantId)
         .input("lookup_hash", sql.Char(64), lookupHash)
         .query(`
-          UPDATE participants
-          SET status = 'opted_out', updated_at = SYSUTCDATETIME()
-          WHERE id = @participant_id;
+          DECLARE @transitioned INT = 0;
+          DECLARE @window_open INT = 0;
+
+          IF @participant_id IS NOT NULL
+          BEGIN
+            SELECT @window_open = CASE WHEN EXISTS (
+              SELECT 1
+              FROM interview_sessions
+              WHERE participant_id = @participant_id
+                AND service_window_expires_at > SYSUTCDATETIME()
+            ) THEN 1 ELSE 0 END;
+
+            UPDATE participants
+            SET status = 'opted_out', updated_at = SYSUTCDATETIME()
+            WHERE id = @participant_id AND status <> 'opted_out';
+
+            SET @transitioned = @@ROWCOUNT;
+          END;
 
           UPDATE interview_sessions
           SET state = 'opted_out', updated_at = SYSUTCDATETIME()
@@ -300,8 +325,14 @@ export class ParticipantService {
           SET status = 'cancelled',
               payload_json = N'{}',
               updated_at = SYSUTCDATETIME()
-          WHERE participant_id = @participant_id
-            AND status IN ('pending', 'processing');
+          WHERE status IN ('pending', 'processing')
+            AND (
+              participant_id = @participant_id
+              OR TRY_CONVERT(uniqueidentifier, JSON_VALUE(payload_json, '$.participantId')) = @participant_id
+              OR TRY_CONVERT(uniqueidentifier, JSON_VALUE(payload_json, '$.sessionId')) IN (
+                SELECT id FROM interview_sessions WHERE participant_id = @participant_id
+              )
+            );
 
           IF NOT EXISTS (SELECT 1 FROM suppression_tokens WHERE phone_lookup_hash = @lookup_hash)
             INSERT INTO suppression_tokens (phone_lookup_hash, reason)
@@ -309,8 +340,14 @@ export class ParticipantService {
 
           INSERT INTO compliance_records (phone_lookup_hash, action)
           VALUES (@lookup_hash, 'stop_received');
+
+          SELECT @transitioned AS transitioned, @window_open AS window_open;
         `);
       await transaction.commit();
+      const row = result.recordset[0];
+      const transitioned = Number(row?.transitioned ?? 0) === 1;
+      const windowOpen = Number(row?.window_open ?? 0) === 1;
+      return { sendConfirmation: transitioned && windowOpen };
     } catch (err) {
       await transaction.rollback();
       throw err;
@@ -359,6 +396,43 @@ export class ParticipantService {
     }
   }
 
+  /**
+   * Media ids still sitting on responses or job payloads. Collected before those
+   * rows are deleted so WhatsApp can be asked to drop the files.
+   */
+  async listMediaIds(participantId: string): Promise<string[]> {
+    const pool = await getPool(this.config);
+    const result = await pool
+      .request()
+      .input("participant_id", sql.UniqueIdentifier, participantId)
+      .query(`
+        /* erasure_media_ids */
+        SELECT DISTINCT media_id
+        FROM (
+          SELECT r.whatsapp_media_id AS media_id
+          FROM responses r
+          INNER JOIN interview_sessions s ON s.id = r.session_id
+          WHERE s.participant_id = @participant_id
+            AND r.whatsapp_media_id IS NOT NULL
+          UNION
+          SELECT JSON_VALUE(j.payload_json, '$.mediaId') AS media_id
+          FROM jobs j
+          WHERE JSON_VALUE(j.payload_json, '$.mediaId') IS NOT NULL
+            AND (
+              j.participant_id = @participant_id
+              OR TRY_CONVERT(uniqueidentifier, JSON_VALUE(j.payload_json, '$.participantId')) = @participant_id
+              OR TRY_CONVERT(uniqueidentifier, JSON_VALUE(j.payload_json, '$.sessionId')) IN (
+                SELECT id FROM interview_sessions WHERE participant_id = @participant_id
+              )
+            )
+        ) AS pending_media
+        WHERE media_id IS NOT NULL
+      `);
+    return result.recordset
+      .map((row) => (typeof row.media_id === "string" ? row.media_id : ""))
+      .filter((mediaId) => mediaId.length > 0);
+  }
+
   async deleteWebhookEvents(lookupHash: string): Promise<void> {
     const pool = await getPool(this.config);
     await pool
@@ -397,7 +471,12 @@ export class ParticipantService {
             SELECT id FROM interview_sessions WHERE participant_id = @participant_id
           );
 
-          DELETE FROM jobs WHERE participant_id = @participant_id;
+          DELETE FROM jobs
+          WHERE participant_id = @participant_id
+            OR TRY_CONVERT(uniqueidentifier, JSON_VALUE(payload_json, '$.participantId')) = @participant_id
+            OR TRY_CONVERT(uniqueidentifier, JSON_VALUE(payload_json, '$.sessionId')) IN (
+              SELECT id FROM interview_sessions WHERE participant_id = @participant_id
+            );
 
           DELETE FROM interview_sessions WHERE participant_id = @participant_id;
           DELETE FROM consents WHERE participant_id = @participant_id;
@@ -478,7 +557,8 @@ export class ArtworkService {
 
           UPDATE interview_sessions
           SET state = 'complete', completed_at = SYSUTCDATETIME(), updated_at = SYSUTCDATETIME()
-          WHERE id = @session_id;
+          WHERE id = @session_id
+            AND state NOT IN ('opted_out', 'expired');
         `);
 
       await transaction.commit();

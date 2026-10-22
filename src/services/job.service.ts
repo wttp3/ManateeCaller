@@ -4,18 +4,62 @@ import { sql, getPool } from "../db/pool.js";
 
 export type JobType = "process_voice_note" | "finalize_interview" | "send_outbox";
 
-const PHONE_PAYLOAD_KEYS = new Set(["phone", "to", "from", "msisdn", "encryptedphone", "encrypted_phone"]);
+const PHONE_PAYLOAD_KEYS = new Set([
+  "phone",
+  "to",
+  "from",
+  "msisdn",
+  "encryptedphone",
+  "encrypted_phone",
+  "messageid",
+  "message_id",
+]);
 
-/** Job rows are durable. A phone number in one of them is personal data at rest. */
-export function assertPayloadHasNoPhone(payload: Record<string, unknown>): void {
-  for (const [key, value] of Object.entries(payload)) {
-    if (PHONE_PAYLOAD_KEYS.has(key.toLowerCase())) {
+/** Digit runs under these keys are ids, not phone numbers. */
+const DIGIT_RUN_EXEMPT_KEYS = new Set(["mediaid", "sessionid", "participantid"]);
+
+const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const STORED_ERROR_MAX = 160;
+
+/** Drop phone-like text before it is written to jobs.last_error. */
+export function sanitiseStoredError(error: string): string {
+  return error
+    .replace(/\+[1-9]\d{6,14}/g, "[redacted]")
+    .replace(/\d{8,}/g, "[redacted]")
+    .slice(0, STORED_ERROR_MAX);
+}
+
+function rejectPhone(value: unknown, key?: string): void {
+  if (key && PHONE_PAYLOAD_KEYS.has(key.toLowerCase())) {
+    throw new Error("Job payload must not include a phone number");
+  }
+  if (typeof value === "string") {
+    if (/\+[1-9]\d{6,14}/.test(value)) {
       throw new Error("Job payload must not include a phone number");
     }
-    if (typeof value === "string" && /\+[1-9]\d{7,14}/.test(value)) {
+    const exempt = key ? DIGIT_RUN_EXEMPT_KEYS.has(key.toLowerCase()) : false;
+    if (!exempt && !UUID_TEXT.test(value) && /\d{8,}/.test(value)) {
       throw new Error("Job payload must not include a phone number");
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      rejectPhone(item);
+    }
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
+      rejectPhone(child, childKey);
     }
   }
+}
+
+/** Job rows are durable. A phone number in one of them, at any depth, is personal data at rest. */
+export function assertPayloadHasNoPhone(payload: Record<string, unknown>): void {
+  rejectPhone(payload);
 }
 
 export class JobService {
@@ -93,7 +137,7 @@ export class JobService {
       .query(`
         UPDATE jobs
         SET status = 'completed', locked_by = NULL, locked_until = NULL, updated_at = SYSUTCDATETIME()
-        WHERE id = @id
+        WHERE id = @id AND status = 'processing'
       `);
   }
 
@@ -102,7 +146,7 @@ export class JobService {
     await pool
       .request()
       .input("id", sql.UniqueIdentifier, jobId)
-      .input("error", sql.NVarChar(512), error.slice(0, 512))
+      .input("error", sql.NVarChar(512), sanitiseStoredError(error))
       .input("retry_minutes", sql.Int, retryMinutes)
       .query(`
         UPDATE jobs
@@ -112,7 +156,7 @@ export class JobService {
             locked_until = NULL,
             run_after = DATEADD(minute, @retry_minutes, SYSUTCDATETIME()),
             updated_at = SYSUTCDATETIME()
-        WHERE id = @id
+        WHERE id = @id AND status = 'processing'
       `);
   }
 

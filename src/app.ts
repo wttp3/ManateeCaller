@@ -112,7 +112,7 @@ export function createApp(config: AppConfig): Express {
           res.status(400).json({ ok: false, error: "participantId required" });
           return;
         }
-        await participants.deleteParticipant(participantId);
+        await interview.eraseParticipant(participantId);
         res.json({ ok: true });
       } catch (err) {
         logError("Erasure failed", { error: err instanceof Error ? err.message : "unknown" });

@@ -64,7 +64,8 @@ export class WhatsAppService {
       headers: { Authorization: `Bearer ${this.config.whatsappAccessToken}` },
     });
     if (!response.ok && response.status !== 404) {
-      throw new Error(`Failed to delete media: ${response.status}`);
+      const detail = await response.text().catch(() => "");
+      throw new Error(`Failed to delete media: ${response.status} ${detail.slice(0, 300)}`);
     }
   }
 
