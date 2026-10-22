@@ -93,19 +93,21 @@ export class WhatsAppService {
     return { buffer, mimeType: meta.mime_type ?? "application/octet-stream" };
   }
 
+  /**
+   * Meta signs the raw entity bytes. Compare those bytes, not a parsed
+   * and re-serialised JSON value.
+   */
   verifySignature(rawBody: Buffer, signatureHeader: string | undefined): boolean {
-    if (!signatureHeader?.startsWith("sha256=")) {
+    if (!Buffer.isBuffer(rawBody) || !signatureHeader?.startsWith("sha256=")) {
       return false;
     }
-    const expected = createHmac("sha256", this.config.whatsappAppSecret)
-      .update(rawBody)
-      .digest("hex");
-    const received = signatureHeader.slice("sha256=".length);
-    try {
-      return timingSafeEqual(Buffer.from(expected), Buffer.from(received));
-    } catch {
+    const receivedHex = signatureHeader.slice("sha256=".length);
+    if (!/^[0-9a-fA-F]{64}$/.test(receivedHex)) {
       return false;
     }
+    const expected = createHmac("sha256", this.config.whatsappAppSecret).update(rawBody).digest();
+    const received = Buffer.from(receivedHex, "hex");
+    return timingSafeEqual(expected, received);
   }
 
   decryptPhone(encryptedPhone: string): string {

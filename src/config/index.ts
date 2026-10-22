@@ -1,5 +1,8 @@
 import { z } from "zod";
 import { parsePilotAllowlist } from "../pilot/allowlist.js";
+import { parseWebhookForwarder } from "../webhook/forwarder.js";
+
+export const DEFAULT_WHATSAPP_WEBHOOK_MAX_BYTES = 256 * 1024;
 
 const hexKey = z
   .string()
@@ -84,6 +87,26 @@ const configSchema = z.object({
   maxVoiceNoteSeconds: z.coerce.number().int().positive().default(120),
   tempAudioDir: z.string().default("./tmp/audio"),
   jobPollIntervalMs: z.coerce.number().int().positive().default(2000),
+  whatsappWebhookMaxBytes: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(1024 * 1024)
+    .default(DEFAULT_WHATSAPP_WEBHOOK_MAX_BYTES),
+  webhookForwarder: z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      try {
+        return parseWebhookForwarder(value);
+      } catch (err) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: err instanceof Error ? err.message : "invalid forwarder",
+        });
+        return z.NEVER;
+      }
+    }),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -116,6 +139,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     maxVoiceNoteSeconds: env.MAX_VOICE_NOTE_SECONDS,
     tempAudioDir: env.TEMP_AUDIO_DIR,
     jobPollIntervalMs: env.JOB_POLL_INTERVAL_MS,
+    whatsappWebhookMaxBytes: env.WHATSAPP_WEBHOOK_MAX_BYTES,
+    webhookForwarder: env.WHATSAPP_WEBHOOK_FORWARDER,
   });
 
   if (!parsed.success) {
@@ -145,6 +170,8 @@ export function redactConfig(config: AppConfig): Record<string, string | number 
     sessionTimeoutHours: config.sessionTimeoutHours,
     maxVoiceNoteBytes: config.maxVoiceNoteBytes,
     maxVoiceNoteSeconds: config.maxVoiceNoteSeconds,
+    whatsappWebhookMaxBytes: config.whatsappWebhookMaxBytes,
+    webhookForwarder: config.webhookForwarder.mode,
     secretsConfigured: true,
   };
 }

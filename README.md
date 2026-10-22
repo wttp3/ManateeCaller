@@ -115,6 +115,10 @@ Colleagues who have opted in message an existing WhatsApp Cloud API number. Ther
 - Job payloads store the participant id, not the phone number. The invite outbox and every job recheck opt-out and blocked status before sending. A cancelled, opted-out, or erased row is not overwritten by a later completion, failure, or retry.
 - Migration `003_legacy_privacy_backfill.sql` links old jobs to a participant via `sessionId`, removes phone keys from job payloads, and clears `last_error` values that contain digits. Migration `004_strip_job_message_id.sql` removes a leftover WhatsApp `messageId` from job payloads. Webhook rows written before `phone_lookup_hash` cannot be linked back to a sender (only a message id and a payload hash were stored). Rows older than 7 days with no lookup hash are deleted. Newer ones stay so a delayed provider retry remains idempotent.
 - `PILOT_ALLOWED_SENDERS` is a comma-separated E.164 allowlist. Inbound messages from other numbers are ignored and logged with the number masked. Outbound sends to other numbers are refused in code. An empty list allows nobody.
+- Inbound webhooks are forwarded by the existing whatsapp-mcp server. It passes Meta's raw body and `X-Hub-Signature-256` through unchanged. The signature is checked against those exact bytes, including when the `Content-Type` has a charset, a proxy adds a header, or the body was gzip-decoded and still carries `Content-Encoding: gzip`. A missing or empty signature is `403`. A still-gzipped body is verified first and inflated only after the signature matches.
+- The same message id is stored once. A Meta retry or a repeated forward, including concurrent duplicates, does not add another webhook row, job, or reply. `delivered` and `read` callbacks, and other events with no messages, return `200` and do not write rows, enqueue jobs, or send. A signed body that is not JSON returns `400` and does not write anything. It does not return `500`.
+- `POST /webhook/whatsapp` reads at most `WHATSAPP_WEBHOOK_MAX_BYTES` bytes (default 262144, ceiling 1048576). A larger body returns `413` and is not processed.
+- `WHATSAPP_WEBHOOK_FORWARDER` is optional and off when unset. Set it to the forwarder's TCP addresses (comma-separated; `X-Forwarded-For` is not trusted) or to `header:<Header-Name>:<shared-value>`. The shared value is not logged and is omitted from `/health`.
 - `WHATSAPP_TEMPLATE_INVITES_ENABLED` defaults to `false`. The template outbox path runs only when this is `true`.
 - `DEPLOY_SMOKE_MODE` or `DISABLE_BACKGROUND_JOBS` stops the background worker from polling. Leave both unset in normal operation. The deploy smoke test sets `DEPLOY_SMOKE_MODE=1`.
 
@@ -212,6 +216,8 @@ Optional (the process starts without them; `NODE_ENV` is already `production` in
 - `ERASURE_ADMIN_TOKEN` (unset disables `POST /api/erasure`)
 - `DEPLOY_SMOKE_MODE` (set to stop background polling)
 - `DISABLE_BACKGROUND_JOBS` (set to stop background polling)
+- `WHATSAPP_WEBHOOK_FORWARDER` (unset disables the forwarder check)
+- `WHATSAPP_WEBHOOK_MAX_BYTES` (default `262144`)
 
 ---
 
