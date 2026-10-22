@@ -3,41 +3,70 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ManateeCaller — Privacy Notice</title>
+  <title>ManateeCaller — Privacy notice</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <main class="container prose">
-    <h1>Privacy Notice (Pilot)</h1>
-    <p><strong>Controller:</strong> ManateeCaller (placeholder — update before live pilot)</p>
-    <p><strong>Contact:</strong> hello@manateecaller.net</p>
+    <h1>Privacy notice</h1>
+    <p>This note is for colleagues in the ManateeCaller internal pilot. It says what we collect, why, and how you join, opt out, or delete your data.</p>
+
+    <h2>Who we are</h2>
+    <p><strong>Straight Six Limited</strong> is the controller.</p>
+    <p>
+      Registered address:<br />
+      Unit C21 Parkhall Business Centre<br />
+      40 Martell Road<br />
+      London<br />
+      SE21 8EN
+    </p>
+    <p>Email <a href="mailto:hello@manateecaller.net">hello@manateecaller.net</a>.</p>
+    <p>The pilot runs on a server in the UK or the EU.</p>
+
+    <h2>Why we use your data</h2>
+    <p>ManateeCaller is an internal art experiment. You answer a few questions with WhatsApp voice notes. Finished answers become one colour on a shared mosaic.</p>
+    <p>The lawful basis is consent. We record that consent when you send <strong>I'm in</strong> on WhatsApp. That phrase is the default way to join. The signup page asks you to read this notice, confirm you are 18 or over, and tick the boxes before it saves a name and number. Those ticks are not the stored consent record. The record is written when you send the phrase.</p>
 
     <h2>What we collect</h2>
     <ul>
-      <li>Name and WhatsApp number at signup</li>
-      <li>Timestamped consent records</li>
-      <li>Voice notes during the interview (processed transiently)</li>
+      <li><strong>Phone number.</strong> Stored encrypted. We also store a separate keyed hash of the number, so we can recognise it without reading the number back from the hash.</li>
+      <li><strong>Name</strong>, if you use the signup page. Stored encrypted. Joining only by WhatsApp stores no name.</li>
+      <li><strong>Voice notes</strong> you send in the interview.</li>
+      <li><strong>Transcripts</strong> of those notes, stored encrypted.</li>
+      <li><strong>A colour tile</strong> when the interview finishes. The colour is calculated from the transcript. The mosaic shows the colour only, not your name, number, or words.</li>
+      <li><strong>Consent records:</strong> the kind of consent (WhatsApp contact, voice processing, and this notice), the time, and a version id.</li>
+    </ul>
+    <p>We only reply to numbers on the colleague list for this pilot.</p>
+
+    <h2>How to join, opt out, or delete</h2>
+    <p>Send these as their own WhatsApp message. Capitals and extra spaces do not matter. In this pilot you start the chat. We reply in that chat.</p>
+    <ul>
+      <li><strong>I'm in</strong> joins you. We record consent and start the interview. If you had opted out, this turns the same record back on. If you had deleted your data, this starts a new record.</li>
+      <li><strong>STOP</strong> opts you out. <strong>unsubscribe</strong>, <strong>cancel</strong>, and <strong>opt out</strong> do the same. We stop the interview, cancel messages we have not sent, and ask WhatsApp to delete voice notes we still have a file id for. Your record stays, with consent marked withdrawn. We send one confirmation if the chat window is still open. To take part again, send <strong>I'm in</strong>.</li>
+      <li><strong>DELETE MY DATA</strong> deletes your data, and it has to come from your own number. We remove your number, name, transcripts, sessions, and consent records, and we ask WhatsApp to delete voice notes we still have a file id for. Your colour stays on the mosaic, with the link to you removed. We keep a keyed hash of the number, with no expiry date, and a note that the deletion happened. We send one confirmation if the chat window is still open. Sending <strong>I'm in</strong> later removes that block and starts a new record. The deletion note stays.</li>
+    </ul>
+    <p>The chat window lasts 24 hours after your last message during an active interview. That is the default. When it closes, the interview stops, and we may be unable to send the confirmation. Your data stays. If the interview has expired and your record is still active, send <strong>STOP</strong>, then <strong>I'm in</strong>, to start again.</p>
+    <p>After STOP or DELETE MY DATA, joining again is by sending <strong>I'm in</strong> on WhatsApp.</p>
+
+    <h2>How long we keep it</h2>
+    <p>There is no automatic expiry for your record.</p>
+    <ul>
+      <li><strong>Voice notes.</strong> We do not keep the audio file. The temporary copy is deleted as soon as we have tried to transcribe it, and we ask WhatsApp to delete its copy at the same time. On STOP and DELETE MY DATA we ask again for any file id we still hold. Those WhatsApp requests are best effort.</li>
+      <li><strong>Transcripts.</strong> Kept encrypted until your colour is saved, then cleared. If you never finish, they stay until you send DELETE MY DATA.</li>
+      <li><strong>Number, name, and consent records.</strong> Kept until you send DELETE MY DATA. STOP leaves them in place, with consent marked withdrawn.</li>
+      <li><strong>Colour tile.</strong> Kept, with no end date. DELETE MY DATA removes the link to you and leaves the colour.</li>
+      <li><strong>After deletion.</strong> The number itself is gone. The keyed hash and the deletion note stay, as described above.</li>
     </ul>
 
-    <h2>How we use it</h2>
-    <p>We contact you on WhatsApp only after explicit opt-in, run a short voice-note interview, transcribe your answers, derive one anonymous colour tile, and delete raw audio after processing.</p>
-
-    <h2>Retention</h2>
+    <h2>Who else handles it</h2>
     <ul>
-      <li>Raw audio: deleted immediately after tile generation</li>
-      <li>Transcripts: deleted after tile generation</li>
-      <li>Phone numbers: stored encrypted; removed on erasure request</li>
-      <li>Artwork tiles: anonymous colour only</li>
-    </ul>
-
-    <h2>Processors</h2>
-    <ul>
-      <li>Meta (WhatsApp Cloud API) — messaging and media</li>
-      <li>ElevenLabs — speech-to-text (review retention settings before live pilot)</li>
+      <li><strong>Meta WhatsApp Cloud API</strong> carries the messages and voice notes.</li>
+      <li><strong>ElevenLabs</strong> turns voice notes into text. Zero retention is off by default. While it is off, audio we send may be kept by ElevenLabs under its <a href="https://elevenlabs.io/privacy">standard privacy policy</a>. If zero retention is switched on, we ask ElevenLabs not to log that audio.</li>
     </ul>
 
     <h2>Your rights</h2>
-    <p>Reply <strong>STOP</strong> on WhatsApp to opt out. Request deletion via the erasure endpoint documented in the README using your participant ID from signup.</p>
+    <p>You can opt out with STOP and delete your data with DELETE MY DATA, as above. Email <a href="mailto:hello@manateecaller.net">hello@manateecaller.net</a> if you want to ask about the data we hold.</p>
+    <p>You can complain to the Information Commissioner's Office: <a href="https://ico.org.uk/make-a-complaint/">ico.org.uk/make-a-complaint</a>.</p>
 
     <p><a href="/">Back to signup</a></p>
   </main>
