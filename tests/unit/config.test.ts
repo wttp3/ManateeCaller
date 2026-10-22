@@ -111,4 +111,43 @@ describe("config", () => {
       }),
     ).toThrow(/pilotAllowedSenders/);
   });
+
+  it("leaves the webhook forwarder off and omits a shared header from the redacted view", () => {
+    const base = {
+      PORT: "3000",
+      NODE_ENV: "test",
+      PUBLIC_BASE_URL: "http://localhost:3000",
+      DATABASE_URL: "Server=localhost;Database=test;",
+      WHATSAPP_PHONE_NUMBER_ID: "123",
+      WHATSAPP_BUSINESS_ACCOUNT_ID: "456",
+      WHATSAPP_ACCESS_TOKEN: "token-value",
+      WHATSAPP_APP_SECRET: "secret-value",
+      WHATSAPP_WEBHOOK_VERIFY_TOKEN: "verify-token",
+      WHATSAPP_TEMPLATE_NAME: "manatee_invite",
+      ELEVENLABS_API_KEY: "eleven-key",
+      DATA_ENCRYPTION_KEY: "ab".repeat(32),
+      TILE_HMAC_KEY: "cd".repeat(32),
+      LOOKUP_HMAC_KEY: "ef".repeat(32),
+    };
+    const off = loadConfig(base);
+    expect(off.webhookForwarder).toEqual({ mode: "off" });
+    expect(off.whatsappWebhookMaxBytes).toBe(256 * 1024);
+
+    const header = loadConfig({
+      ...base,
+      WHATSAPP_WEBHOOK_FORWARDER: "header:X-Webhook-Forwarder:pilot-shared",
+      WHATSAPP_WEBHOOK_MAX_BYTES: "1024",
+    });
+    expect(header.webhookForwarder).toEqual({
+      mode: "header",
+      name: "X-Webhook-Forwarder",
+      value: "pilot-shared",
+    });
+    expect(header.whatsappWebhookMaxBytes).toBe(1024);
+    const redacted = JSON.stringify(redactConfig(header));
+    expect(redacted).toContain('"webhookForwarder":"header"');
+    expect(redacted).not.toContain("pilot-shared");
+
+    expect(() => loadConfig({ ...base, WHATSAPP_WEBHOOK_FORWARDER: "not-an-ip" })).toThrow(/webhookForwarder/);
+  });
 });

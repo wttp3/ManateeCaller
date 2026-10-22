@@ -15,9 +15,101 @@ import { INBOUND_IGNORED_MESSAGE, isPilotSenderAllowed, maskPhone } from "./pilo
 import { normalizePhone } from "./utils/phone.js";
 import { safeEqualText } from "./utils/crypto.js";
 import { logError, logInfo } from "./utils/logger.js";
+import { isForwarderRequestAllowed } from "./webhook/forwarder.js";
+import { runWebhookOnce } from "./webhook/once.js";
+import { decodeWebhookBody, PayloadTooLargeError, readCappedBody } from "./webhook/raw-body.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const publicDir = resolvePublicDir(__dirname);
+
+type InboundMessage = {
+  id?: unknown;
+  from?: unknown;
+  type?: unknown;
+  text?: { body?: string };
+  audio?: { id?: string };
+  button?: { payload?: string };
+  interactive?: { button_reply?: { id?: string } };
+};
+
+function hubSignature(req: Request): string | undefined {
+  const value = req.headers["x-hub-signature-256"];
+  return typeof value === "string" ? value : undefined;
+}
+
+function forwarderHeader(req: Request, config: AppConfig): string | undefined {
+  if (config.webhookForwarder.mode !== "header") {
+    return undefined;
+  }
+  const value = req.get(config.webhookForwarder.name);
+  return typeof value === "string" ? value : undefined;
+}
+
+async function acceptInboundMessages(
+  payload: unknown,
+  config: AppConfig,
+  participants: ParticipantService,
+  jobs: JobService,
+  interview: InterviewService,
+): Promise<void> {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return;
+  }
+  const entries = (payload as { entry?: unknown }).entry;
+  if (!Array.isArray(entries)) {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const changes = (entry as { changes?: unknown }).changes;
+    if (!Array.isArray(changes)) {
+      continue;
+    }
+    for (const change of changes) {
+      if (!change || typeof change !== "object") {
+        continue;
+      }
+      const messages = (change as { value?: { messages?: unknown } }).value?.messages;
+      if (!Array.isArray(messages)) {
+        continue;
+      }
+      for (const message of messages) {
+        if (!message || typeof message !== "object") {
+          continue;
+        }
+        const inbound = message as InboundMessage;
+        const messageId = inbound.id;
+        if (typeof messageId !== "string" || messageId.length === 0) {
+          continue;
+        }
+        const from = normalizePhone(typeof inbound.from === "string" ? inbound.from : "");
+        if (!isPilotSenderAllowed(from, config.pilotAllowedSenders)) {
+          logInfo(INBOUND_IGNORED_MESSAGE, { from: maskPhone(from) });
+          continue;
+        }
+
+        const eventKey = `msg:${messageId}`;
+        await runWebhookOnce(eventKey, async () => {
+          const isNew = await jobs.recordWebhook(eventKey, message, participants.phoneLookupHash(from));
+          if (!isNew) {
+            return;
+          }
+          await interview.handleInboundMessage({
+            from,
+            type: typeof inbound.type === "string" ? inbound.type : "",
+            text: inbound.text?.body,
+            buttonReplyId: inbound.button?.payload ?? inbound.interactive?.button_reply?.id,
+            mediaId: inbound.audio?.id,
+            messageId,
+          });
+        });
+      }
+    }
+  }
+}
 
 export function createApp(config: AppConfig): Express {
   const app = express();
@@ -34,6 +126,9 @@ export function createApp(config: AppConfig): Express {
       max: 200,
       standardHeaders: true,
       legacyHeaders: false,
+      // Forwarded webhooks may include X-Forwarded-For. The limit stays keyed
+      // to the TCP peer; that header is not a configuration error.
+      validate: { xForwardedForHeader: false },
     }),
   );
 
@@ -51,7 +146,7 @@ export function createApp(config: AppConfig): Express {
   app.post(
     "/api/signup",
     express.json(),
-    rateLimit({ windowMs: 60 * 60 * 1000, max: 20 }),
+    rateLimit({ windowMs: 60 * 60 * 1000, max: 20, validate: { xForwardedForHeader: false } }),
     async (req, res) => {
       try {
         const body = req.body as {
@@ -94,7 +189,7 @@ export function createApp(config: AppConfig): Express {
   app.post(
     "/api/erasure",
     express.json(),
-    rateLimit({ windowMs: 60 * 60 * 1000, max: 10 }),
+    rateLimit({ windowMs: 60 * 60 * 1000, max: 10, validate: { xForwardedForHeader: false } }),
     async (req, res) => {
       if (!config.erasureAdminToken) {
         res.sendStatus(404);
@@ -133,77 +228,79 @@ export function createApp(config: AppConfig): Express {
     res.sendStatus(403);
   });
 
-  app.post(
-    "/webhook/whatsapp",
-    express.raw({ type: "application/json" }),
-    async (req, res) => {
-      const rawBody = req.body as Buffer;
-      const signature = req.headers["x-hub-signature-256"] as string | undefined;
-
-      if (!whatsapp.verifySignature(rawBody, signature)) {
-        res.sendStatus(403);
+  app.post("/webhook/whatsapp", async (req, res) => {
+    let rawBody: Buffer;
+    try {
+      rawBody = await readCappedBody(req, config.whatsappWebhookMaxBytes);
+    } catch (err) {
+      if (res.headersSent) {
         return;
       }
-
-      res.sendStatus(200);
-
-      try {
-        const payload = JSON.parse(rawBody.toString("utf8")) as {
-          entry?: Array<{
-            changes?: Array<{
-              value?: {
-                messages?: Array<{
-                  id: string;
-                  from: string;
-                  type: string;
-                  text?: { body?: string };
-                  audio?: { id?: string };
-                  button?: { payload?: string };
-                  interactive?: { button_reply?: { id?: string } };
-                }>;
-              };
-            }>;
-          }>;
-        };
-
-        for (const entry of payload.entry ?? []) {
-          for (const change of entry.changes ?? []) {
-            for (const message of change.value?.messages ?? []) {
-              const from = normalizePhone(typeof message.from === "string" ? message.from : "");
-              if (!isPilotSenderAllowed(from, config.pilotAllowedSenders)) {
-                logInfo(INBOUND_IGNORED_MESSAGE, { from: maskPhone(from) });
-                continue;
-              }
-
-              const eventKey = `msg:${message.id}`;
-              const isNew = await jobs.recordWebhook(eventKey, message, participants.phoneLookupHash(from));
-              if (!isNew) {
-                continue;
-              }
-
-              await interview.handleInboundMessage({
-                from,
-                type: message.type,
-                text: message.text?.body,
-                buttonReplyId:
-                  message.button?.payload ??
-                  message.interactive?.button_reply?.id,
-                mediaId: message.audio?.id,
-                messageId: message.id,
-              });
-            }
-          }
-        }
-      } catch (err) {
-        logError("Webhook processing failed", {
-          error: err instanceof Error ? err.message : "unknown",
-        });
+      if (err instanceof PayloadTooLargeError) {
+        res.sendStatus(413);
+        return;
       }
-    },
-  );
+      logError("Webhook body could not be read");
+      res.sendStatus(400);
+      return;
+    }
 
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+    if (!isForwarderRequestAllowed(config.webhookForwarder, req.socket.remoteAddress, forwarderHeader(req, config))) {
+      logInfo("Rejected webhook from an unexpected forwarder", { mode: config.webhookForwarder.mode });
+      res.sendStatus(403);
+      return;
+    }
+
+    const signature = hubSignature(req);
+    let signatureOk = false;
+    try {
+      signatureOk = whatsapp.verifySignature(rawBody, signature);
+    } catch {
+      signatureOk = false;
+    }
+    if (!signatureOk) {
+      res.sendStatus(403);
+      return;
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(decodeWebhookBody(rawBody, config.whatsappWebhookMaxBytes).toString("utf8"));
+    } catch (err) {
+      if (err instanceof PayloadTooLargeError) {
+        res.sendStatus(413);
+        return;
+      }
+      logError("Webhook body was not valid JSON");
+      res.sendStatus(400);
+      return;
+    }
+
+    res.sendStatus(200);
+
+    try {
+      await acceptInboundMessages(payload, config, participants, jobs, interview);
+    } catch (err) {
+      logError("Webhook processing failed", {
+        error: err instanceof Error ? err.message : "unknown",
+      });
+    }
+  });
+
+  app.use((err: Error & { status?: number; statusCode?: number; type?: string }, _req: Request, res: Response, _next: NextFunction) => {
+    if (res.headersSent) {
+      return;
+    }
+    const status = err.status ?? err.statusCode;
+    if (status === 413 || err.type === "entity.too.large") {
+      res.sendStatus(413);
+      return;
+    }
     logError("Unhandled error", { error: err.message });
+    if (typeof status === "number" && status >= 400 && status < 500) {
+      res.sendStatus(status);
+      return;
+    }
     res.status(500).json({ ok: false, error: "Internal server error" });
   });
 
