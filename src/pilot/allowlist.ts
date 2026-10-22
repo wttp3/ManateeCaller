@@ -75,3 +75,13 @@ export class PilotSendRefusedError extends Error {
     this.name = "PilotSendRefusedError";
   }
 }
+
+export const OPT_OUT_REFUSED_MESSAGE =
+  "Refusing outbound WhatsApp send because the recipient has opted out or is blocked";
+
+export class OptOutSendRefusedError extends Error {
+  constructor() {
+    super("Outbound send refused: recipient has opted out or is blocked");
+    this.name = "OptOutSendRefusedError";
+  }
+}

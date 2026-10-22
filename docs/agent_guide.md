@@ -30,6 +30,14 @@ There is no approved `manatee_invite` template. A colleague opts in by sending t
 
 ## Opt-out (`STOP`)
 
+`STOP`, `unsubscribe`, `cancel`, and `opt out` opt the sender out in every state. Ignore case and extra spaces.
+
 > You've been unsubscribed from ManateeCaller. We won't message you again.
 
-Do not send follow-ups after STOP. Record the suppression token and stop all outbound messages.
+Send that confirmation only when the 24-hour window is still open, and only once. Cancel pending invites and jobs. Do not send anything else. A later opt-in keyword can opt them back in.
+
+## Erasure
+
+The sender can text `DELETE MY DATA` (or `ERASURE_KEYWORD`). Delete their participant, consents, sessions, transcripts, and audio references, anonymise their mosaic tile, and remove their webhook rows. Confirm once if the window is open:
+
+> Your ManateeCaller data has been deleted. We won't message you again.

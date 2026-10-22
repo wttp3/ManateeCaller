@@ -4,19 +4,36 @@ import { sql, getPool } from "../db/pool.js";
 
 export type JobType = "process_voice_note" | "finalize_interview" | "send_outbox";
 
+const PHONE_PAYLOAD_KEYS = new Set(["phone", "to", "from", "msisdn", "encryptedphone", "encrypted_phone"]);
+
+/** Job rows are durable. A phone number in one of them is personal data at rest. */
+export function assertPayloadHasNoPhone(payload: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(payload)) {
+    if (PHONE_PAYLOAD_KEYS.has(key.toLowerCase())) {
+      throw new Error("Job payload must not include a phone number");
+    }
+    if (typeof value === "string" && /\+[1-9]\d{7,14}/.test(value)) {
+      throw new Error("Job payload must not include a phone number");
+    }
+  }
+}
+
 export class JobService {
   constructor(private readonly config: AppConfig) {}
 
   async enqueue(jobType: JobType, payload: Record<string, unknown>, runAfter?: Date): Promise<void> {
+    assertPayloadHasNoPhone(payload);
+    const participantId = typeof payload.participantId === "string" ? payload.participantId : null;
     const pool = await getPool(this.config);
     await pool
       .request()
       .input("job_type", sql.NVarChar(64), jobType)
       .input("payload_json", sql.NVarChar(sql.MAX), JSON.stringify(payload))
       .input("run_after", sql.DateTime2, runAfter ?? new Date())
+      .input("participant_id", sql.UniqueIdentifier, participantId)
       .query(`
-        INSERT INTO jobs (job_type, payload_json, run_after)
-        VALUES (@job_type, @payload_json, @run_after)
+        INSERT INTO jobs (job_type, payload_json, run_after, participant_id)
+        VALUES (@job_type, @payload_json, @run_after, @participant_id)
       `);
   }
 
@@ -99,7 +116,7 @@ export class JobService {
       `);
   }
 
-  async recordWebhook(eventKey: string, payload: unknown): Promise<boolean> {
+  async recordWebhook(eventKey: string, payload: unknown, phoneLookupHash?: string | null): Promise<boolean> {
     const pool = await getPool(this.config);
     const payloadHash = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
     try {
@@ -107,9 +124,10 @@ export class JobService {
         .request()
         .input("event_key", sql.NVarChar(256), eventKey)
         .input("payload_hash", sql.Char(64), payloadHash)
+        .input("phone_lookup_hash", sql.Char(64), phoneLookupHash ?? null)
         .query(`
-          INSERT INTO webhook_events (event_key, payload_hash)
-          VALUES (@event_key, @payload_hash)
+          INSERT INTO webhook_events (event_key, payload_hash, phone_lookup_hash)
+          VALUES (@event_key, @payload_hash, @phone_lookup_hash)
         `);
       return true;
     } catch {

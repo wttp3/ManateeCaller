@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 12;
@@ -30,6 +30,15 @@ export function decryptString(ciphertext: string, keyHex: string): string {
 
 export function hmacHex(input: string, keyHex: string): string {
   return createHmac("sha256", keyFromHex(keyHex)).update(input).digest("hex");
+}
+
+export function safeEqualText(left: string, right: string): boolean {
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
+  if (a.length !== b.length) {
+    return false;
+  }
+  return timingSafeEqual(a, b);
 }
 
 export function randomSlug(length = 12): string {

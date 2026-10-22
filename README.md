@@ -85,7 +85,7 @@ Open `http://localhost:3000` for signup. Point Meta webhooks to `https://<tunnel
 |---|---|
 | `POST /api/signup` | Create participant and record consents. Does not send a template unless `WHATSAPP_TEMPLATE_INVITES_ENABLED=true` |
 | `GET /api/mosaic` | List anonymous artwork tiles |
-| `POST /api/erasure` | Delete participant data; retain suppression token |
+| `POST /api/erasure` | Disabled unless `ERASURE_ADMIN_TOKEN` is set, then requires `Authorization: Bearer`. Participants delete their data by texting `ERASURE_KEYWORD` (default `DELETE MY DATA`) from their own number |
 | `GET/POST /webhook/whatsapp` | Meta webhook verification and inbound messages |
 | `GET /health` | Health check (secrets redacted). `sha` is `DEPLOY_COMMIT_SHA` when that variable is set |
 
@@ -98,7 +98,7 @@ Open `http://localhost:3000` for signup. Point Meta webhooks to `https://<tunnel
 - Phone numbers encrypted at rest with separate lookup hash for deduplication/suppression
 - Raw audio deleted after each voice note is processed
 - Transcripts deleted after tile generation
-- Reply `STOP` on WhatsApp to opt out
+- Reply `STOP` on WhatsApp to opt out (`unsubscribe`, `cancel`, and `opt out` too)
 - ElevenLabs Zero Retention (`ELEVENLABS_ENABLE_ZERO_RETENTION=true`) required before claiming full third-party deletion — otherwise disclose provider retention in the privacy notice
 
 See [`public/privacy.html`](public/privacy.html).
@@ -110,6 +110,9 @@ See [`public/privacy.html`](public/privacy.html).
 Colleagues who have opted in message an existing WhatsApp Cloud API number. There is no approved `manatee_invite` template, so the app does not depend on sending one.
 
 - `OPT_IN_KEYWORD` (default `I'm in`) starts consent and the session with free-form replies.
+- `STOP`, `unsubscribe`, `cancel`, and `opt out` opt the sender out in every state, including when there is no session. Pending invites and jobs are cancelled. One confirmation is sent only while the 24-hour window is open. A later opt-in keyword can opt back in. Opted-out and blocked numbers are refused in the send path, next to the allowlist.
+- `ERASURE_KEYWORD` (default `DELETE MY DATA`) from the sender's own number deletes their participant, consents, sessions, transcripts, and audio references, drops their webhook rows, and anonymises their mosaic tile. One confirmation is sent only while the window is open.
+- Job payloads store the participant id, not the phone number. The invite outbox and every job recheck opt-out and blocked status before sending.
 - `PILOT_ALLOWED_SENDERS` is a comma-separated E.164 allowlist. Inbound messages from other numbers are ignored and logged with the number masked. Outbound sends to other numbers are refused in code. An empty list allows nobody.
 - `WHATSAPP_TEMPLATE_INVITES_ENABLED` defaults to `false`. The template outbox path runs only when this is `true`.
 - `DEPLOY_SMOKE_MODE` or `DISABLE_BACKGROUND_JOBS` stops the background worker from polling. Leave both unset in normal operation. The deploy smoke test sets `DEPLOY_SMOKE_MODE=1`.
@@ -204,6 +207,8 @@ Optional (the process starts without them; `NODE_ENV` is already `production` in
 - `WHATSAPP_TEMPLATE_INVITES_ENABLED` (default `false`)
 - `OPT_IN_KEYWORD` (default `I'm in`)
 - `PILOT_ALLOWED_SENDERS` (default empty — nobody is allowed)
+- `ERASURE_KEYWORD` (default `DELETE MY DATA`)
+- `ERASURE_ADMIN_TOKEN` (unset disables `POST /api/erasure`)
 - `DEPLOY_SMOKE_MODE` (set to stop background polling)
 - `DISABLE_BACKGROUND_JOBS` (set to stop background polling)
 

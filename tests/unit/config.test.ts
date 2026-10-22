@@ -27,6 +27,8 @@ describe("config", () => {
     expect(JSON.stringify(redacted)).not.toContain("eleven-key");
     expect(config.whatsappTemplateInvitesEnabled).toBe(false);
     expect(config.optInKeyword).toBe("I'm in");
+    expect(config.erasureKeyword).toBe("DELETE MY DATA");
+    expect(config.erasureAdminToken).toBeNull();
     expect(config.pilotAllowedSenders).toEqual([]);
     expect(redacted.whatsappTemplateInvitesEnabled).toBe(false);
     expect(redacted.pilotAllowedSenderCount).toBe(0);
@@ -60,6 +62,33 @@ describe("config", () => {
     expect(redacted).not.toContain("+447700900000");
     expect(redacted).not.toContain("+14155552671");
     expect(redactConfig(config).pilotAllowedSenderCount).toBe(2);
+  });
+
+  it("keeps the erasure admin token out of the redacted view", () => {
+    const config = loadConfig({
+      PORT: "3000",
+      NODE_ENV: "test",
+      PUBLIC_BASE_URL: "http://localhost:3000",
+      DATABASE_URL: "Server=localhost;Database=test;",
+      WHATSAPP_PHONE_NUMBER_ID: "123",
+      WHATSAPP_BUSINESS_ACCOUNT_ID: "456",
+      WHATSAPP_ACCESS_TOKEN: "token-value",
+      WHATSAPP_APP_SECRET: "secret-value",
+      WHATSAPP_WEBHOOK_VERIFY_TOKEN: "verify-token",
+      WHATSAPP_TEMPLATE_NAME: "manatee_invite",
+      ELEVENLABS_API_KEY: "eleven-key",
+      DATA_ENCRYPTION_KEY: "ab".repeat(32),
+      TILE_HMAC_KEY: "cd".repeat(32),
+      LOOKUP_HMAC_KEY: "ef".repeat(32),
+      ERASURE_KEYWORD: "erase me",
+      ERASURE_ADMIN_TOKEN: "test-admin-token",
+    });
+    expect(config.erasureKeyword).toBe("erase me");
+    expect(config.erasureAdminToken).toBe("test-admin-token");
+    const redacted = JSON.stringify(redactConfig(config));
+    expect(redacted).not.toContain("test-admin-token");
+    expect(redactConfig(config).erasureAdminConfigured).toBe(true);
+    expect(redactConfig(config).erasureKeyword).toBe("erase me");
   });
 
   it("rejects an allowlist entry that is not E.164", () => {

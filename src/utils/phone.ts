@@ -57,8 +57,9 @@ function stripTrunkZero(e164: string): string {
 }
 
 export function normalizePhone(raw: string): string {
-  const withoutTrunkMarker = raw.trim().replace(/\(0\)/g, "");
-  let digits = withoutTrunkMarker.replace(/[^\d+]/g, "");
+  // Keep every digit, including a parenthesised trunk marker. Italy (39) retains
+  // that 0; stripTrunkZero removes it only for countries that omit the trunk.
+  let digits = raw.trim().replace(/[^\d+]/g, "");
   if (digits.startsWith("00")) {
     digits = `+${digits.slice(2)}`;
   } else if (!digits.startsWith("+")) {

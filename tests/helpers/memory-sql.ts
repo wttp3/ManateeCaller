@@ -45,12 +45,38 @@ export type MemoryResponse = {
   session_id: string;
   question_index: number;
   encrypted_transcript: string | null;
+  whatsapp_media_id?: string | null;
 };
 
 export type MemoryTile = {
-  session_id: string;
+  session_id: string | null;
   color_hex: string;
   public_slug: string;
+};
+
+export type MemoryJob = {
+  id: string;
+  job_type: string;
+  payload_json: string;
+  participant_id: string | null;
+  status: string;
+};
+
+export type MemoryWebhook = {
+  event_key: string;
+  payload_hash: string;
+  phone_lookup_hash: string | null;
+};
+
+export type MemorySuppression = {
+  phone_lookup_hash: string;
+  reason: string;
+  expires_at: Date | null;
+};
+
+export type MemoryCompliance = {
+  phone_lookup_hash: string;
+  action: string;
 };
 
 export type MemoryStore = {
@@ -60,9 +86,10 @@ export type MemoryStore = {
   outbox: MemoryOutbox[];
   responses: MemoryResponse[];
   artwork: MemoryTile[];
-  jobs: Array<{ job_type: string; payload_json: string }>;
-  webhookEvents: Array<{ event_key: string; payload_hash: string }>;
-  suppression: Array<{ phone_lookup_hash: string; expires_at: Date | null }>;
+  jobs: MemoryJob[];
+  webhookEvents: MemoryWebhook[];
+  suppression: MemorySuppression[];
+  compliance: MemoryCompliance[];
 };
 
 export const memoryDebug = {
@@ -82,6 +109,7 @@ function emptyStore(): MemoryStore {
     jobs: [],
     webhookEvents: [],
     suppression: [],
+    compliance: [],
   };
 }
 
@@ -117,12 +145,161 @@ function fail(sqlText: string): never {
   throw new Error(message);
 }
 
+function payloadParticipantId(payloadJson: string): string | null {
+  try {
+    const payload = JSON.parse(payloadJson) as { participantId?: unknown };
+    return typeof payload.participantId === "string" ? payload.participantId : null;
+  } catch {
+    return null;
+  }
+}
+
+function applyStop(inputs: Map<string, unknown>, store: MemoryStore): { recordset: Array<Record<string, unknown>> } {
+  const participantId = inputs.get("participant_id");
+  const hash = String(inputs.get("lookup_hash") ?? "");
+  if (typeof participantId === "string" && participantId.length > 0) {
+    const participant = store.participants.find((item) => item.id === participantId);
+    if (participant) {
+      participant.status = "opted_out";
+      participant.updated_at = new Date();
+    }
+    for (const session of store.sessions) {
+      if (session.participant_id === participantId && session.state !== "complete") {
+        session.state = "opted_out";
+        session.updated_at = new Date();
+      }
+    }
+    for (const consent of store.consents) {
+      if (consent.participant_id === participantId && consent.withdrawn_at === null) {
+        consent.withdrawn_at = new Date();
+      }
+    }
+    for (const row of store.outbox) {
+      if (row.participant_id === participantId && row.status === "pending") {
+        row.status = "cancelled";
+      }
+    }
+    const sessionIds = new Set(
+      store.sessions.filter((session) => session.participant_id === participantId).map((session) => session.id),
+    );
+    for (const job of store.jobs) {
+      const ownsJob =
+        job.participant_id === participantId ||
+        payloadParticipantId(job.payload_json) === participantId ||
+        sessionIds.has(payloadSessionId(job.payload_json) ?? "");
+      if (ownsJob && (job.status === "pending" || job.status === "processing")) {
+        job.status = "cancelled";
+        job.payload_json = "{}";
+      }
+    }
+  }
+  if (hash && !store.suppression.some((item) => item.phone_lookup_hash === hash)) {
+    store.suppression.push({ phone_lookup_hash: hash, reason: "stop", expires_at: null });
+  }
+  if (hash) {
+    store.compliance.push({ phone_lookup_hash: hash, action: "stop_received" });
+  }
+  return { recordset: [] };
+}
+
+function payloadSessionId(payloadJson: string): string | null {
+  try {
+    const payload = JSON.parse(payloadJson) as { sessionId?: unknown };
+    return typeof payload.sessionId === "string" ? payload.sessionId : null;
+  } catch {
+    return null;
+  }
+}
+
+function applyErasure(inputs: Map<string, unknown>, store: MemoryStore): { recordset: Array<Record<string, unknown>> } {
+  const participantId = String(inputs.get("participant_id") ?? "");
+  const hash = String(inputs.get("lookup_hash") ?? "");
+  const sessionIds = new Set(
+    store.sessions.filter((session) => session.participant_id === participantId).map((session) => session.id),
+  );
+  store.responses = store.responses.filter((response) => !sessionIds.has(response.session_id));
+  for (const tile of store.artwork) {
+    if (tile.session_id && sessionIds.has(tile.session_id)) {
+      tile.session_id = null;
+    }
+  }
+  store.jobs = store.jobs.filter(
+    (job) => job.participant_id !== participantId && payloadParticipantId(job.payload_json) !== participantId,
+  );
+  store.sessions = store.sessions.filter((session) => session.participant_id !== participantId);
+  store.consents = store.consents.filter((consent) => consent.participant_id !== participantId);
+  store.outbox = store.outbox.filter((row) => row.participant_id !== participantId);
+  store.webhookEvents = store.webhookEvents.filter((event) => event.phone_lookup_hash !== hash);
+  store.participants = store.participants.filter((participant) => participant.id !== participantId);
+  const existing = store.suppression.find((item) => item.phone_lookup_hash === hash);
+  if (existing) {
+    existing.reason = "erasure_request";
+  } else if (hash) {
+    store.suppression.push({ phone_lookup_hash: hash, reason: "erasure_request", expires_at: null });
+  }
+  return { recordset: [] };
+}
+
 function execute(
   sqlText: string,
   inputs: Map<string, unknown>,
   store: MemoryStore,
 ): { recordset: Array<Record<string, unknown>> } {
   const sql = compact(sqlText);
+
+  if (sql.includes("stop_received")) {
+    return applyStop(inputs, store);
+  }
+
+  if (sql.includes("participant_erased")) {
+    return applyErasure(inputs, store);
+  }
+
+  if (sql.includes("delete from suppression_tokens")) {
+    const hash = String(inputs.get("hash") ?? inputs.get("lookup_hash") ?? "");
+    store.suppression = store.suppression.filter((item) => {
+      if (item.phone_lookup_hash !== hash) {
+        return true;
+      }
+      if (sql.includes("reason = 'stop'")) {
+        return item.reason !== "stop";
+      }
+      return false;
+    });
+    return { recordset: [] };
+  }
+
+  if (sql.includes("update participants") && sql.includes("status = 'active'")) {
+    const id = String(inputs.get("participant_id") ?? inputs.get("id") ?? "");
+    const row = store.participants.find((item) => item.id === id);
+    if (row) {
+      row.status = "active";
+      row.updated_at = new Date();
+    }
+    return { recordset: [] };
+  }
+
+  if (sql.includes("update outbox_messages") && sql.includes("cancelled")) {
+    const row = store.outbox.find((item) => item.id === inputs.get("id"));
+    if (row && row.status === "pending") {
+      row.status = "cancelled";
+    }
+    return { recordset: [] };
+  }
+
+  if (sql.includes("delete from webhook_events")) {
+    const hash = String(inputs.get("lookup_hash") ?? inputs.get("hash") ?? "");
+    store.webhookEvents = store.webhookEvents.filter((event) => event.phone_lookup_hash !== hash);
+    return { recordset: [] };
+  }
+
+  if (sql.includes("insert into compliance_records")) {
+    store.compliance.push({
+      phone_lookup_hash: String(inputs.get("lookup_hash") ?? inputs.get("hash") ?? ""),
+      action: String(inputs.get("action") ?? "recorded"),
+    });
+    return { recordset: [] };
+  }
 
   if (sql.includes("insert into webhook_events")) {
     const eventKey = String(inputs.get("event_key"));
@@ -133,6 +310,7 @@ function execute(
     store.webhookEvents.push({
       event_key: eventKey,
       payload_hash: String(inputs.get("payload_hash")),
+      phone_lookup_hash: inputs.get("phone_lookup_hash") ? String(inputs.get("phone_lookup_hash")) : null,
     });
     return { recordset: [] };
   }
@@ -187,9 +365,13 @@ function execute(
   }
 
   if (sql.includes("insert into jobs")) {
+    const participantId = inputs.get("participant_id");
     store.jobs.push({
+      id: randomUUID(),
       job_type: String(inputs.get("job_type")),
       payload_json: String(inputs.get("payload_json")),
+      participant_id: typeof participantId === "string" && participantId.length > 0 ? participantId : null,
+      status: "pending",
     });
     return { recordset: [] };
   }
@@ -209,10 +391,13 @@ function execute(
   }
 
   if (sql.includes("from suppression_tokens")) {
-    const hash = String(inputs.get("hash"));
+    const hash = String(inputs.get("hash") ?? inputs.get("lookup_hash") ?? "");
     const row = store.suppression.find((item) => item.phone_lookup_hash === hash);
     if (!row || (row.expires_at && row.expires_at.getTime() <= Date.now())) {
       return { recordset: [] };
+    }
+    if (sql.includes("select reason")) {
+      return { recordset: [{ reason: row.reason }] };
     }
     return { recordset: [{ found: 1 }] };
   }
@@ -274,13 +459,18 @@ function execute(
       (response) => response.session_id === sessionId && response.question_index === questionIndex,
     );
     const transcript = String(inputs.get("encrypted_transcript"));
+    const mediaId = inputs.get("whatsapp_media_id");
     if (existing) {
       existing.encrypted_transcript = transcript;
+      if (typeof mediaId === "string") {
+        existing.whatsapp_media_id = mediaId;
+      }
     } else {
       store.responses.push({
         session_id: sessionId,
         question_index: questionIndex,
         encrypted_transcript: transcript,
+        whatsapp_media_id: typeof mediaId === "string" ? mediaId : null,
       });
     }
     return { recordset: [] };
@@ -305,6 +495,23 @@ function execute(
       session.updated_at = new Date();
     }
     return { recordset: [] };
+  }
+
+  if (
+    sql.includes("from interview_sessions") &&
+    sql.includes("where participant_id = @participant_id") &&
+    !sql.includes("not in")
+  ) {
+    const participantId = String(inputs.get("participant_id"));
+    const rows = store.sessions.filter((session) => session.participant_id === participantId);
+    return {
+      recordset: rows.map((session) => ({
+        id: session.id,
+        state: session.state,
+        participant_id: session.participant_id,
+        service_window_expires_at: session.service_window_expires_at,
+      })),
+    };
   }
 
   if (sql.includes("from interview_sessions") && sql.includes("where id = @id")) {

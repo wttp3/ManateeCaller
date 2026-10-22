@@ -211,6 +211,162 @@ export class ParticipantService {
     };
   }
 
+  async getParticipantById(participantId: string): Promise<{
+    id: string;
+    encryptedPhone: string;
+    status: string;
+    lookupHash: string;
+  } | null> {
+    const pool = await getPool(this.config);
+    const result = await pool
+      .request()
+      .input("id", sql.UniqueIdentifier, participantId)
+      .query(`
+        SELECT id, encrypted_phone, status, phone_lookup_hash
+        FROM participants
+        WHERE id = @id
+      `);
+    const row = result.recordset[0];
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id as string,
+      encryptedPhone: row.encrypted_phone as string,
+      status: row.status as string,
+      lookupHash: row.phone_lookup_hash as string,
+    };
+  }
+
+  async getSuppression(lookupHash: string): Promise<{ reason: string } | null> {
+    const pool = await getPool(this.config);
+    const result = await pool
+      .request()
+      .input("hash", sql.Char(64), lookupHash)
+      .query(`
+        SELECT reason
+        FROM suppression_tokens
+        WHERE phone_lookup_hash = @hash
+          AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
+      `);
+    const reason = result.recordset[0]?.reason as string | undefined;
+    return reason ? { reason } : null;
+  }
+
+  async clearStopSuppression(lookupHash: string): Promise<void> {
+    const pool = await getPool(this.config);
+    await pool
+      .request()
+      .input("hash", sql.Char(64), lookupHash)
+      .query(`
+        DELETE FROM suppression_tokens
+        WHERE phone_lookup_hash = @hash AND reason = 'stop'
+      `);
+  }
+
+  /**
+   * Opt out in every state, including when there is no participant yet.
+   * Pending invites and jobs are cancelled. A later opt-in keyword can clear a stop token.
+   */
+  async recordStop(participantId: string | null, lookupHash: string): Promise<void> {
+    const pool = await getPool(this.config);
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+    try {
+      await new sql.Request(transaction)
+        .input("participant_id", sql.UniqueIdentifier, participantId)
+        .input("lookup_hash", sql.Char(64), lookupHash)
+        .query(`
+          UPDATE participants
+          SET status = 'opted_out', updated_at = SYSUTCDATETIME()
+          WHERE id = @participant_id;
+
+          UPDATE interview_sessions
+          SET state = 'opted_out', updated_at = SYSUTCDATETIME()
+          WHERE participant_id = @participant_id
+            AND state NOT IN ('complete');
+
+          UPDATE consents
+          SET withdrawn_at = SYSUTCDATETIME()
+          WHERE participant_id = @participant_id
+            AND withdrawn_at IS NULL;
+
+          UPDATE outbox_messages
+          SET status = 'cancelled'
+          WHERE participant_id = @participant_id
+            AND status = 'pending';
+
+          UPDATE jobs
+          SET status = 'cancelled',
+              payload_json = N'{}',
+              updated_at = SYSUTCDATETIME()
+          WHERE participant_id = @participant_id
+            AND status IN ('pending', 'processing');
+
+          IF NOT EXISTS (SELECT 1 FROM suppression_tokens WHERE phone_lookup_hash = @lookup_hash)
+            INSERT INTO suppression_tokens (phone_lookup_hash, reason)
+            VALUES (@lookup_hash, 'stop');
+
+          INSERT INTO compliance_records (phone_lookup_hash, action)
+          VALUES (@lookup_hash, 'stop_received');
+        `);
+      await transaction.commit();
+    } catch (err) {
+      await transaction.rollback();
+      throw err;
+    }
+  }
+
+  /** Drop a stop suppression, mark the participant active, and open a new session. */
+  async reopenAfterOptOut(participantId: string, lookupHash: string): Promise<string> {
+    const pool = await getPool(this.config);
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+    try {
+      await new sql.Request(transaction)
+        .input("hash", sql.Char(64), lookupHash)
+        .query(`
+          DELETE FROM suppression_tokens
+          WHERE phone_lookup_hash = @hash AND reason = 'stop'
+        `);
+
+      await new sql.Request(transaction)
+        .input("participant_id", sql.UniqueIdentifier, participantId)
+        .query(`
+          UPDATE participants
+          SET status = 'active', updated_at = SYSUTCDATETIME()
+          WHERE id = @participant_id
+        `);
+
+      const inserted = await new sql.Request(transaction)
+        .input("participant_id", sql.UniqueIdentifier, participantId)
+        .input("hours", sql.Int, this.config.sessionTimeoutHours)
+        .query(`
+          INSERT INTO interview_sessions (participant_id, state, service_window_expires_at)
+          OUTPUT INSERTED.id
+          VALUES (@participant_id, 'awaiting_opt_in', DATEADD(hour, @hours, SYSUTCDATETIME()))
+        `);
+
+      const sessionId = inserted.recordset[0]?.id as string | undefined;
+      if (!sessionId) {
+        throw new Error("Failed to reopen session");
+      }
+      await transaction.commit();
+      return sessionId;
+    } catch (err) {
+      await transaction.rollback();
+      throw err;
+    }
+  }
+
+  async deleteWebhookEvents(lookupHash: string): Promise<void> {
+    const pool = await getPool(this.config);
+    await pool
+      .request()
+      .input("lookup_hash", sql.Char(64), lookupHash)
+      .query(`DELETE FROM webhook_events WHERE phone_lookup_hash = @lookup_hash`);
+  }
+
   async deleteParticipant(participantId: string): Promise<void> {
     const pool = await getPool(this.config);
     const participant = await pool
@@ -230,21 +386,30 @@ export class ParticipantService {
         .input("participant_id", sql.UniqueIdentifier, participantId)
         .input("lookup_hash", sql.Char(64), lookupHash)
         .query(`
+          /* participant_erased */
           DELETE r FROM responses r
           INNER JOIN interview_sessions s ON s.id = r.session_id
           WHERE s.participant_id = @participant_id;
 
-          UPDATE artwork_tiles SET session_id = NULL
-          FROM artwork_tiles t
-          INNER JOIN interview_sessions s ON s.id = t.session_id
-          WHERE s.participant_id = @participant_id;
+          UPDATE artwork_tiles
+          SET session_id = NULL
+          WHERE session_id IN (
+            SELECT id FROM interview_sessions WHERE participant_id = @participant_id
+          );
+
+          DELETE FROM jobs WHERE participant_id = @participant_id;
 
           DELETE FROM interview_sessions WHERE participant_id = @participant_id;
           DELETE FROM consents WHERE participant_id = @participant_id;
           DELETE FROM outbox_messages WHERE participant_id = @participant_id;
+          DELETE FROM webhook_events WHERE phone_lookup_hash = @lookup_hash;
           DELETE FROM participants WHERE id = @participant_id;
 
-          IF NOT EXISTS (SELECT 1 FROM suppression_tokens WHERE phone_lookup_hash = @lookup_hash)
+          IF EXISTS (SELECT 1 FROM suppression_tokens WHERE phone_lookup_hash = @lookup_hash)
+            UPDATE suppression_tokens
+            SET reason = 'erasure_request'
+            WHERE phone_lookup_hash = @lookup_hash;
+          ELSE
             INSERT INTO suppression_tokens (phone_lookup_hash, reason)
             VALUES (@lookup_hash, 'erasure_request');
         `);

@@ -18,7 +18,7 @@ describe("pendingMigrationFiles", () => {
   it("is idempotent for the shipped migrations", () => {
     const files = readdirSync(join(repoRoot, "migrations"));
     const first = pendingMigrationFiles(files, []);
-    expect(first).toEqual(["001_initial.sql"]);
+    expect(first).toEqual(["001_initial.sql", "002_privacy_controls.sql"]);
     expect(pendingMigrationFiles(files, first)).toEqual([]);
     expect(pendingMigrationFiles(files, new Set(first))).toEqual([]);
   });
