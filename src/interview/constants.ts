@@ -1,4 +1,4 @@
-export const CONSENT_TEXT_VERSION = "2026-07-21-v1";
+export const CONSENT_TEXT_VERSION = "2026-10-22-v1";
 
 export const WHATSAPP_CONTACT_CONSENT =
   "I agree that ManateeCaller may contact me on WhatsApp for the voice-note interview.";

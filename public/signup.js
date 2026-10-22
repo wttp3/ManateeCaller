@@ -27,8 +27,8 @@ form?.addEventListener("submit", async (event) => {
     }
     const keyword = result.optInKeyword || "I'm in";
     message.textContent = result.delivery === "template"
-      ? `You're in. Check WhatsApp for your invitation. Keep this participant ID for deletion requests: ${result.participantId}`
-      : `You're in. Send "${keyword}" to the ManateeCaller WhatsApp number to start. We reply in that chat and do not message you first. Keep this participant ID for deletion requests: ${result.participantId}`;
+      ? "You're in. Check WhatsApp for your invitation. The privacy notice explains STOP and how to delete your data."
+      : `You're in. Send "${keyword}" to the ManateeCaller WhatsApp number to start. We reply in that chat. The privacy notice explains STOP and how to delete your data.`;
     message.className = "message success";
     message.hidden = false;
     form.reset();

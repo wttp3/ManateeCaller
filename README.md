@@ -91,17 +91,19 @@ Open `http://localhost:3000` for signup. Point Meta webhooks to `https://<tunnel
 
 ---
 
-## Privacy (UK/EU pilot)
+## Privacy (internal pilot)
 
-- Dual consent: WhatsApp contact + voice processing
-- 18+ gate at signup
-- Phone numbers encrypted at rest with separate lookup hash for deduplication/suppression
-- Raw audio deleted after each voice note is processed
-- Transcripts deleted after tile generation
-- Reply `STOP` on WhatsApp to opt out (`unsubscribe`, `cancel`, and `opt out` too)
-- ElevenLabs Zero Retention (`ELEVENLABS_ENABLE_ZERO_RETENTION=true`) required before claiming full third-party deletion — otherwise disclose provider retention in the privacy notice
+Colleagues should read [`public/privacy.html`](public/privacy.html). The notice uses the keyword defaults (`I'm in`, `STOP`, `DELETE MY DATA`).
 
-See [`public/privacy.html`](public/privacy.html).
+- Consent rows are written when the sender messages the opt-in keyword. The signup checkboxes are required to save a signup, and they are not those rows.
+- The signup page asks for 18+ confirmation. That flag is not stored as its own column.
+- Phone numbers are encrypted at rest. A separate keyed hash is stored for lookup and suppression.
+- A name is stored encrypted only when someone uses the signup page. Keyword-only join stores no name.
+- The local voice-note file is deleted when the transcription attempt finishes, and WhatsApp media delete is requested then.
+- Transcripts stay encrypted until the tile is saved, then they are cleared. If no tile is saved, they stay until `DELETE MY DATA`.
+- The colour tile has no expiry. Erasure removes the link to the person and leaves the colour on the mosaic.
+- `STOP` (also `unsubscribe`, `cancel`, and `opt out`) opts out and leaves the record in place. `ERASURE_KEYWORD` (default `DELETE MY DATA`) deletes the sender's rows. A keyed hash and compliance notes remain after erasure. The notes are a record of each STOP and each erasure. Hosting location for our own copy is still to be confirmed.
+- ElevenLabs zero retention defaults to off (`ELEVENLABS_ENABLE_ZERO_RETENTION`). While it is off, the notice says any copy is kept under ElevenLabs' DPA (`https://elevenlabs.io/dpa`). ElevenLabs is our processor for that audio.
 
 ---
 

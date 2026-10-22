@@ -83,6 +83,10 @@ button {
 
 .tile:focus, .tile:hover { transform: scale(1.08); outline: 2px solid white; }
 
-.prose h2 { margin-top: 2rem; }
+.prose h1 { text-align: left; }
+.prose h2 { margin-top: 1.6rem; margin-bottom: 0.35rem; }
+.prose p, .prose li { line-height: 1.5; }
+.prose ul { margin: 0.25rem 0 0.75rem; padding-left: 1.2rem; }
+.prose li + li { margin-top: 0.45rem; }
 .footer-note { text-align: center; color: var(--muted); }
 a { color: var(--accent); }
