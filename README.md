@@ -87,7 +87,7 @@ Open `http://localhost:3000` for signup. Point Meta webhooks to `https://<tunnel
 | `GET /api/mosaic` | List anonymous artwork tiles |
 | `POST /api/erasure` | Delete participant data; retain suppression token |
 | `GET/POST /webhook/whatsapp` | Meta webhook verification and inbound messages |
-| `GET /health` | Health check (secrets redacted) |
+| `GET /health` | Health check (secrets redacted). `sha` is `DEPLOY_COMMIT_SHA` when that variable is set |
 
 ---
 
@@ -125,7 +125,73 @@ npm run build
 npm start
 ```
 
-CI runs tests, typecheck, and Gitleaks secret scanning on push/PR.
+CI runs tests, typecheck, build, and Gitleaks secret scanning on push and pull request. Every run packs `release.tar.gz` and smoke-tests `node dist/index.js` from that tarball. Pushes to main upload it as the `deploy-manateecaller` artifact, kept for 3 days. Pull requests build and verify the same tarball and do not upload it.
+
+---
+
+## Production deploy
+
+Prod runs under PM2. The release root is `/home/bitnami/nodeapps/manateecaller/manateecaller`. Slug and PM2 process name are both `manateecaller`.
+
+```
+/home/bitnami/nodeapps/manateecaller/manateecaller/
+  current -> releases/<id>-<sha>/
+  releases/<id>-<sha>/          # extracted release.tar.gz
+    dist/                       # compiled app (node dist/index.js)
+    public/                     # signup and mosaic static files
+    migrations/                 # SQL applied by npm run migrate:prod
+    node_modules/               # production dependencies, installed in CI
+    package.json
+    package-lock.json
+    ecosystem.config.cjs        # PM2 app manateecaller, one instance
+    .env -> ../../shared/.env   # host link, created at activate
+  shared/
+    .env                        # runtime env, never committed
+```
+
+GitHub Actions on `main` uploads one file, `release.tar.gz`, as the artifact `deploy-manateecaller` (3-day retention). The tarball root is that release directory. CI runs `npm ci --omit=dev` in a staging directory and packs the result, including production `node_modules`. The tarball contains no `.env` file. The host downloads the artifact and extracts it. Install and build stay in CI.
+
+On the server, after extract:
+
+```bash
+npm run migrate:prod
+pm2 start ecosystem.config.cjs --only manateecaller
+```
+
+`npm run migrate:prod` is `node dist/db/migrate.js`. It records applied filenames in `schema_migrations` and skips them on the next run, so running it again changes nothing.
+
+`ecosystem.config.cjs` starts one fork of `dist/index.js` with `NODE_ENV=production`. When `DEPLOY_RELEASE_ROOT` is set, PM2 cwd stays on that path (the `current` symlink) instead of the real release directory. The process reads `.env` from that directory at startup. The host keeps the real file at `shared/.env` and links it into the release. Do not commit `shared/.env`.
+
+### Environment variable names
+
+Set these in `shared/.env`. Names only — values stay on the server.
+
+Required:
+
+- `PUBLIC_BASE_URL`
+- `DATABASE_URL`
+- `WHATSAPP_PHONE_NUMBER_ID`
+- `WHATSAPP_BUSINESS_ACCOUNT_ID`
+- `WHATSAPP_ACCESS_TOKEN`
+- `WHATSAPP_APP_SECRET`
+- `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
+- `WHATSAPP_TEMPLATE_NAME`
+- `ELEVENLABS_API_KEY`
+- `DATA_ENCRYPTION_KEY`
+- `TILE_HMAC_KEY`
+- `LOOKUP_HMAC_KEY`
+
+Optional (the process starts without them; `NODE_ENV` is already `production` in the PM2 config):
+
+- `PORT`
+- `NODE_ENV`
+- `WHATSAPP_API_VERSION`
+- `ELEVENLABS_ENABLE_ZERO_RETENTION`
+- `SESSION_TIMEOUT_HOURS`
+- `MAX_VOICE_NOTE_BYTES`
+- `MAX_VOICE_NOTE_SECONDS`
+- `TEMP_AUDIO_DIR`
+- `JOB_POLL_INTERVAL_MS`
 
 ---
 
