@@ -31,6 +31,13 @@ describe("pilot allowlist", () => {
     expect(isPilotSenderAllowed("not-a-number", allowlist)).toBe(false);
   });
 
+  it("treats a trunk-zero allowlist entry as the same number as inbound digits", () => {
+    const allowlist = parsePilotAllowlist("+44 (0) 7700 900000");
+    expect(allowlist).toEqual(["+447700900000"]);
+    expect(isPilotSenderAllowed("447700900000", allowlist)).toBe(true);
+    expect(isPilotSenderAllowed("+44 0 7700 900000", allowlist)).toBe(true);
+  });
+
   it("masks numbers so logs do not contain the full digit string", () => {
     const raw = "+447700900000";
     const masked = maskPhone(raw);
@@ -49,9 +56,27 @@ describe("opt-in keyword", () => {
     expect(isOptInMessage({ text: "hello" }, "I'm in")).toBe(false);
   });
 
-  it("uses the configured keyword and still accepts the template button payload", () => {
+  it("uses the configured keyword and accepts the template button only for an existing participant", () => {
     expect(isOptInMessage({ text: "Count   me in" }, "count me in")).toBe(true);
     expect(isOptInMessage({ text: "I'm in" }, "count me in")).toBe(false);
-    expect(isOptInMessage({ buttonReplyId: "IM_IN" }, "count me in")).toBe(true);
+    expect(isOptInMessage({ buttonReplyId: "IM_IN" }, "count me in")).toBe(false);
+    expect(
+      isOptInMessage({ buttonReplyId: "IM_IN" }, "count me in", {
+        templateInvitesEnabled: true,
+        participantExists: false,
+      }),
+    ).toBe(false);
+    expect(
+      isOptInMessage({ buttonReplyId: "IM_IN" }, "count me in", {
+        templateInvitesEnabled: false,
+        participantExists: true,
+      }),
+    ).toBe(false);
+    expect(
+      isOptInMessage({ buttonReplyId: "IM_IN" }, "count me in", {
+        templateInvitesEnabled: true,
+        participantExists: true,
+      }),
+    ).toBe(true);
   });
 });

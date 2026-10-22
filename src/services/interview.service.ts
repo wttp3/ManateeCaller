@@ -14,10 +14,13 @@ import { WhatsAppService } from "./whatsapp.service.js";
 import { ElevenLabsService } from "./elevenlabs.service.js";
 import { ArtworkService } from "./participant.service.js";
 import { JobService } from "./job.service.js";
+import { expiredNoticeBody, isServiceWindowOpen } from "../interview/service-window.js";
 import { INBOUND_IGNORED_MESSAGE, isPilotSenderAllowed, maskPhone } from "../pilot/allowlist.js";
 import { isOptInMessage } from "../pilot/opt-in.js";
 import { normalizePhone } from "../utils/phone.js";
-import { logInfo } from "../utils/logger.js";
+import { logError, logInfo } from "../utils/logger.js";
+
+export const OUTBOX_MAX_ATTEMPTS = 5;
 
 export class InterviewService {
   private readonly participants: ParticipantService;
@@ -51,7 +54,13 @@ export class InterviewService {
     const lookupHash = this.participants.phoneLookupHash(phone);
     const participant = await this.participants.getParticipantByLookup(lookupHash);
     if (!participant || participant.status !== "active") {
-      if (!participant && isOptInMessage(input, this.config.optInKeyword)) {
+      if (
+        !participant &&
+        isOptInMessage(input, this.config.optInKeyword, {
+          templateInvitesEnabled: this.config.whatsappTemplateInvitesEnabled,
+          participantExists: false,
+        })
+      ) {
         await this.startKeywordOptIn(phone);
       }
       return;
@@ -70,13 +79,18 @@ export class InterviewService {
 
     await this.touchServiceWindow(session.id);
 
-    if (isOptInMessage(input, this.config.optInKeyword)) {
+    if (
+      isOptInMessage(input, this.config.optInKeyword, {
+        templateInvitesEnabled: this.config.whatsappTemplateInvitesEnabled,
+        participantExists: true,
+      })
+    ) {
       if (
         session.state === "pending_invite" ||
         session.state === "invited" ||
         session.state === "awaiting_opt_in"
       ) {
-        await this.handleOptIn(session, storedPhone);
+        await this.handleOptIn(session, storedPhone, participant.id);
       }
       return;
     }
@@ -105,7 +119,11 @@ export class InterviewService {
     const sessionRow = await pool
       .request()
       .input("id", sql.UniqueIdentifier, payload.sessionId)
-      .query(`SELECT state, participant_id FROM interview_sessions WHERE id = @id`);
+      .query(`
+        SELECT state, participant_id, service_window_expires_at
+        FROM interview_sessions
+        WHERE id = @id
+      `);
 
     const state = sessionRow.recordset[0]?.state as InterviewState | undefined;
     if (!state) {
@@ -123,6 +141,10 @@ export class InterviewService {
       .query(`SELECT encrypted_phone FROM participants WHERE id = @id`);
 
     const phone = this.whatsapp.decryptPhone(participant.recordset[0].encrypted_phone as string);
+    if (!isServiceWindowOpen(sessionRow.recordset[0].service_window_expires_at as Date | null)) {
+      await this.expireSession(payload.sessionId, phone);
+      return;
+    }
 
     const { buffer } = await this.whatsapp.downloadMedia(payload.mediaId);
     if (buffer.length > this.config.maxVoiceNoteBytes) {
@@ -160,34 +182,31 @@ export class InterviewService {
       `);
 
     const nextState = stateAfterVoiceAnswer(state, questionIndex);
-    await pool
-      .request()
-      .input("id", sql.UniqueIdentifier, payload.sessionId)
-      .input("state", sql.NVarChar(64), nextState)
-      .input("current_question_index", sql.Int, questionIndex + 1)
-      .query(`
-        UPDATE interview_sessions
-        SET state = @state, current_question_index = @current_question_index, updated_at = SYSUTCDATETIME()
-        WHERE id = @id
-      `);
-
-    if (nextState === "processing") {
-      await this.jobs.enqueue("finalize_interview", { sessionId: payload.sessionId, phone });
+    if (!(await this.sendFreeFormIfWindowOpen(payload.sessionId, phone, nextState))) {
       return;
     }
 
-    const nextPrompt = promptForState(nextState);
-    if (nextPrompt) {
-      await this.whatsapp.sendText(phone, nextPrompt);
+    await this.advanceSession(payload.sessionId, nextState, questionIndex + 1);
+
+    if (nextState === "processing") {
+      await this.jobs.enqueue("finalize_interview", { sessionId: payload.sessionId, phone });
     }
   }
 
   async finalizeInterview(payload: { sessionId: string; phone: string }): Promise<void> {
-    const slug = await this.artwork.finalizeSession(payload.sessionId);
-    await this.whatsapp.sendText(
-      payload.phone,
-      PROMPTS.complete(slug, this.config.publicBaseUrl),
-    );
+    if (!(await this.serviceWindowOpen(payload.sessionId))) {
+      await this.expireSession(payload.sessionId, payload.phone);
+      return;
+    }
+
+    const tile = await this.artwork.draftTile(payload.sessionId);
+    const body = PROMPTS.complete(tile.publicSlug, this.config.publicBaseUrl);
+    if (!(await this.serviceWindowOpen(payload.sessionId))) {
+      await this.expireSession(payload.sessionId, payload.phone);
+      return;
+    }
+    await this.whatsapp.sendText(payload.phone, body);
+    await this.artwork.persistTile(payload.sessionId, tile);
   }
 
   async processOutbox(): Promise<void> {
@@ -201,46 +220,10 @@ export class InterviewService {
     `);
 
     for (const row of pending.recordset) {
-      const phone = this.whatsapp.decryptPhone(row.encrypted_phone as string);
-      const payload = JSON.parse(row.payload_json as string) as { templateName?: string };
-
       try {
-        if (row.message_type === "template_invite") {
-          if (!this.config.whatsappTemplateInvitesEnabled) {
-            await pool
-              .request()
-              .input("id", sql.UniqueIdentifier, row.id)
-              .query(`UPDATE outbox_messages SET status = 'skipped' WHERE id = @id`);
-            logInfo("Skipping WhatsApp template invite because template invites are disabled");
-            continue;
-          }
-          await this.whatsapp.sendTemplate(phone, payload.templateName ?? this.config.whatsappTemplateName);
-        }
-
-        await pool
-          .request()
-          .input("id", sql.UniqueIdentifier, row.id)
-          .query(`
-            UPDATE outbox_messages SET status = 'sent', sent_at = SYSUTCDATETIME() WHERE id = @id
-          `);
-
-        await pool
-          .request()
-          .input("participant_id", sql.UniqueIdentifier, row.participant_id)
-          .query(`
-            UPDATE interview_sessions
-            SET state = 'awaiting_opt_in', updated_at = SYSUTCDATETIME()
-            WHERE participant_id = @participant_id AND state = 'pending_invite'
-          `);
+        await this.deliverOutboxRow(pool, row);
       } catch (err) {
-        await pool
-          .request()
-          .input("id", sql.UniqueIdentifier, row.id)
-          .input("attempts", sql.Int, (row.attempts ?? 0) + 1)
-          .query(`
-            UPDATE outbox_messages SET attempts = @attempts WHERE id = @id
-          `);
-        throw err;
+        await this.recordOutboxFailure(pool, row, err);
       }
     }
   }
@@ -283,13 +266,15 @@ export class InterviewService {
       return;
     }
     const created = await this.participants.createFromKeyword(phone);
-    await this.handleOptIn({ id: created.sessionId, state: "awaiting_opt_in" }, phone);
+    await this.handleOptIn({ id: created.sessionId, state: "awaiting_opt_in" }, phone, created.participantId);
   }
 
   private async handleOptIn(
     session: { id: string; state: InterviewState },
     phone: string,
+    participantId: string,
   ): Promise<void> {
+    await this.participants.recordKeywordConsents(participantId);
     await this.whatsapp.sendText(phone, PROMPTS.intro);
     const firstQuestion = promptForState(stateAfterIntroSent());
     if (firstQuestion) {
@@ -331,6 +316,164 @@ export class InterviewService {
     }
 
     await this.whatsapp.sendText(phone, PROMPTS.optOut);
+  }
+
+  private async serviceWindowOpen(sessionId: string): Promise<boolean> {
+    const pool = await getPool(this.config);
+    const result = await pool
+      .request()
+      .input("id", sql.UniqueIdentifier, sessionId)
+      .query(`
+        SELECT service_window_expires_at
+        FROM interview_sessions
+        WHERE id = @id
+      `);
+    return isServiceWindowOpen(result.recordset[0]?.service_window_expires_at as Date | null | undefined);
+  }
+
+  /**
+   * Mark the session expired. The expired prompt is free-form, so it is sent
+   * only while the customer-service window is still open and dropped otherwise.
+   */
+  private async expireSession(sessionId: string, phone: string): Promise<void> {
+    const pool = await getPool(this.config);
+    const result = await pool
+      .request()
+      .input("id", sql.UniqueIdentifier, sessionId)
+      .query(`
+        SELECT service_window_expires_at
+        FROM interview_sessions
+        WHERE id = @id
+      `);
+    const notice = expiredNoticeBody(result.recordset[0]?.service_window_expires_at as Date | null | undefined);
+    if (notice) {
+      await this.whatsapp.sendText(phone, notice);
+    }
+    await this.markSessionExpired(sessionId);
+  }
+
+  private async markSessionExpired(sessionId: string): Promise<void> {
+    const pool = await getPool(this.config);
+    await pool
+      .request()
+      .input("id", sql.UniqueIdentifier, sessionId)
+      .query(`
+        UPDATE interview_sessions
+        SET state = 'expired', updated_at = SYSUTCDATETIME()
+        WHERE id = @id AND state NOT IN ('complete', 'opted_out', 'expired')
+      `);
+  }
+
+  /**
+   * Send the next free-form question only inside an open window.
+   * Returns false when the session was expired and nothing was sent.
+   * A processing transition has no prompt here; the mosaic link is sent later.
+   */
+  private async sendFreeFormIfWindowOpen(
+    sessionId: string,
+    phone: string,
+    nextState: InterviewState,
+  ): Promise<boolean> {
+    if (!(await this.serviceWindowOpen(sessionId))) {
+      await this.expireSession(sessionId, phone);
+      return false;
+    }
+    if (nextState === "processing") {
+      return true;
+    }
+    const nextPrompt = promptForState(nextState);
+    if (nextPrompt) {
+      await this.whatsapp.sendText(phone, nextPrompt);
+    }
+    return true;
+  }
+
+  private async advanceSession(sessionId: string, nextState: InterviewState, questionIndex: number): Promise<void> {
+    const pool = await getPool(this.config);
+    await pool
+      .request()
+      .input("id", sql.UniqueIdentifier, sessionId)
+      .input("state", sql.NVarChar(64), nextState)
+      .input("current_question_index", sql.Int, questionIndex)
+      .query(`
+        UPDATE interview_sessions
+        SET state = @state, current_question_index = @current_question_index, updated_at = SYSUTCDATETIME()
+        WHERE id = @id
+      `);
+  }
+
+  private async deliverOutboxRow(
+    pool: Awaited<ReturnType<typeof getPool>>,
+    row: {
+      id: string;
+      participant_id: string;
+      message_type: string;
+      payload_json: string;
+      encrypted_phone: string;
+    },
+  ): Promise<void> {
+    const phone = this.whatsapp.decryptPhone(row.encrypted_phone);
+    const payload = JSON.parse(row.payload_json) as { templateName?: string };
+
+    if (row.message_type === "template_invite") {
+      if (!this.config.whatsappTemplateInvitesEnabled) {
+        await pool
+          .request()
+          .input("id", sql.UniqueIdentifier, row.id)
+          .query(`UPDATE outbox_messages SET status = 'skipped' WHERE id = @id`);
+        logInfo("Skipping WhatsApp template invite because template invites are disabled");
+        return;
+      }
+      await this.whatsapp.sendTemplate(phone, payload.templateName ?? this.config.whatsappTemplateName);
+    }
+
+    await pool
+      .request()
+      .input("id", sql.UniqueIdentifier, row.id)
+      .query(`
+        UPDATE outbox_messages SET status = 'sent', sent_at = SYSUTCDATETIME() WHERE id = @id
+      `);
+
+    await pool
+      .request()
+      .input("participant_id", sql.UniqueIdentifier, row.participant_id)
+      .query(`
+        UPDATE interview_sessions
+        SET state = 'awaiting_opt_in', updated_at = SYSUTCDATETIME()
+        WHERE participant_id = @participant_id AND state = 'pending_invite'
+      `);
+  }
+
+  private async recordOutboxFailure(
+    pool: Awaited<ReturnType<typeof getPool>>,
+    row: { id: string; message_type: string; attempts?: number },
+    err: unknown,
+  ): Promise<void> {
+    const attempts = Number(row.attempts ?? 0) + 1;
+    const status = attempts >= OUTBOX_MAX_ATTEMPTS ? "failed" : "pending";
+    try {
+      await pool
+        .request()
+        .input("id", sql.UniqueIdentifier, row.id)
+        .input("attempts", sql.Int, attempts)
+        .input("status", sql.NVarChar(32), status)
+        .query(`
+          UPDATE outbox_messages
+          SET attempts = @attempts, status = @status
+          WHERE id = @id
+        `);
+    } catch (updateErr) {
+      logError("Failed to record outbox attempt", {
+        messageType: row.message_type,
+        error: updateErr instanceof Error ? updateErr.message : "unknown",
+      });
+    }
+    logError("Outbox message failed", {
+      messageType: row.message_type,
+      attempts,
+      status,
+      error: err instanceof Error ? err.message : "unknown",
+    });
   }
 
   private isStopMessage(input: { text?: string; buttonReplyId?: string }): boolean {

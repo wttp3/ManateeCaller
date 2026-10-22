@@ -17,7 +17,7 @@
 
 ## How It Works
 
-1. **Sign up** at `/` with name, WhatsApp number, 18+ confirmation, privacy notice, and dual consent. Signup does not send a WhatsApp template.
+1. **Sign up** at `/` with name, WhatsApp number, 18+ confirmation, privacy notice, and the consent checkboxes. Signup stores the participant and does not write consent rows or send a WhatsApp template.
 2. **Opt in on WhatsApp** — the colleague messages the keyword (default `I'm in`) to the existing number. That opens the 24-hour customer-service window. ManateeCaller records consent, starts the session, and replies with free-form messages only.
 3. **Interview** — three short questions, each answered with a voice note.
 4. **Voice → colour** — ElevenLabs transcribes each note; when all three are in, transcripts are combined and mapped to a colour via `HMAC-SHA-256`. Raw audio and transcripts are then deleted.

@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -22,7 +22,8 @@ vi.mock("../../src/db/pool.js", async () => {
 import { createApp } from "../../src/app.js";
 import { loadConfig } from "../../src/config/index.js";
 import { INBOUND_IGNORED_MESSAGE } from "../../src/pilot/allowlist.js";
-import { InterviewService } from "../../src/services/interview.service.js";
+import { OUTBOX_MAX_ATTEMPTS, InterviewService } from "../../src/services/interview.service.js";
+import { encryptString } from "../../src/utils/crypto.js";
 import { testEnv } from "../helpers/env.js";
 import { installFetchMock, type RecordedCall } from "../helpers/fetch-mock.js";
 import { memoryDebug, memorySnapshot, resetMemory } from "../helpers/memory-sql.js";
@@ -85,6 +86,31 @@ function webhookBody(from: string, text: string, id = "wamid.pilot.1"): Buffer {
                     from: from.replace(/^\+/, ""),
                     type: "text",
                     text: { body: text },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    }),
+  );
+}
+
+function webhookButton(from: string, payload: string, id: string): Buffer {
+  return Buffer.from(
+    JSON.stringify({
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                messages: [
+                  {
+                    id,
+                    from: from.replace(/^\+/, ""),
+                    type: "button",
+                    button: { payload, text: "I'm in" },
                   },
                 ],
               },
@@ -243,7 +269,7 @@ describe("pilot keyword opt-in", () => {
     expect(body.delivery).toBe("keyword");
     expect(body.optInKeyword).toBe("I'm in");
     expect(memorySnapshot().outbox).toHaveLength(0);
-    expect(memorySnapshot().consents).toHaveLength(3);
+    expect(memorySnapshot().consents).toHaveLength(0);
     expect(graphCalls()).toHaveLength(0);
 
     const webhook = await postWebhook(base, webhookBody(ALLOWED, "I'm in", "wamid.after-signup.1"));
@@ -292,12 +318,11 @@ describe("pilot keyword opt-in", () => {
     calls.splice(0, calls.length);
     const blockedSignup = await signup(enabled.base, BLOCKED);
     expect(blockedSignup.status).toBe(201);
-    expect(memorySnapshot().outbox).toHaveLength(1);
-    await expect(interview.processOutbox()).rejects.toThrow(/pilot allowlist/);
+    expect(memorySnapshot().outbox).toHaveLength(0);
+    expect(memorySnapshot().consents).toHaveLength(0);
+    await interview.processOutbox();
     expect(graphCalls()).toHaveLength(0);
     expect(elevenCalls()).toHaveLength(0);
-    expect(memorySnapshot().outbox[0]?.status).toBe("pending");
-    expect(memorySnapshot().outbox[0]?.attempts).toBe(1);
     expect(logs.join("\n")).not.toContain("14155552671");
   });
 
@@ -321,5 +346,139 @@ describe("pilot keyword opt-in", () => {
     expect(elevenCalls()).toHaveLength(0);
     expect(memorySnapshot().outbox[0]?.status).toBe("skipped");
     expect(memorySnapshot().sessions[0]?.state).toBe("pending_invite");
+  });
+
+  it("matches an allowlisted trunk-zero number against inbound WhatsApp digits", async () => {
+    const { base } = await startApp({ PILOT_ALLOWED_SENDERS: "+44 (0) 7700 900000" });
+    const response = await postWebhook(base, webhookBody("447700900000", "I'm in", "wamid.trunk.1"));
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(memorySnapshot().sessions.some((session) => session.state === "awaiting_voice_q1")).toBe(true);
+    });
+    expect(unexpectedSql()).toEqual([]);
+    expect(memorySnapshot().participants).toHaveLength(1);
+    expect(memorySnapshot().consents).toHaveLength(3);
+    expect(graphCalls()).toHaveLength(2);
+  });
+
+  it("records consent from the template button only when invites are enabled and the participant exists", async () => {
+    const enabled = await startApp({
+      PILOT_ALLOWED_SENDERS: ALLOWED,
+      WHATSAPP_TEMPLATE_INVITES_ENABLED: "true",
+    });
+    expect((await signup(enabled.base, ALLOWED)).status).toBe(201);
+    expect(memorySnapshot().consents).toHaveLength(0);
+
+    const accepted = await postWebhook(enabled.base, webhookButton(ALLOWED, "IM_IN", "wamid.button.1"));
+    expect(accepted.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(memorySnapshot().sessions.some((session) => session.state === "awaiting_voice_q1")).toBe(true);
+    });
+    expect(unexpectedSql()).toEqual([]);
+    expect(memorySnapshot().consents).toHaveLength(3);
+    expect(graphCalls().every((call) => (call.body as { type?: string }).type === "text")).toBe(true);
+
+    resetMemory();
+    calls.splice(0, calls.length);
+    const disabled = await startApp({ PILOT_ALLOWED_SENDERS: ALLOWED });
+    expect((await signup(disabled.base, ALLOWED)).status).toBe(201);
+    const ignored = await postWebhook(disabled.base, webhookButton(ALLOWED, "IM_IN", "wamid.button.2"));
+    expect(ignored.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(memorySnapshot().webhookEvents).toHaveLength(1);
+    });
+    expect(memorySnapshot().consents).toHaveLength(0);
+    expect(memorySnapshot().sessions[0]?.state).toBe("pending_invite");
+    expect(graphCalls()).toHaveLength(0);
+
+    resetMemory();
+    calls.splice(0, calls.length);
+    const fresh = await startApp({
+      PILOT_ALLOWED_SENDERS: ALLOWED,
+      WHATSAPP_TEMPLATE_INVITES_ENABLED: "true",
+    });
+    const stranger = await postWebhook(fresh.base, webhookButton(ALLOWED, "IM_IN", "wamid.button.3"));
+    expect(stranger.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(memorySnapshot().webhookEvents).toHaveLength(1);
+    });
+    expect(memorySnapshot().participants).toHaveLength(0);
+    expect(memorySnapshot().consents).toHaveLength(0);
+    expect(graphCalls()).toHaveLength(0);
+  });
+
+  it("caps a failed outbox row and still delivers the next row", async () => {
+    const failTo = "+447700900111";
+    const config = loadConfig(
+      testEnv({
+        PILOT_ALLOWED_SENDERS: `${ALLOWED},${failTo}`,
+        WHATSAPP_TEMPLATE_INVITES_ENABLED: "true",
+      }),
+    );
+    const key = "ab".repeat(32);
+    const earlier = new Date("2026-10-22T10:00:00.000Z");
+    const later = new Date("2026-10-22T10:01:00.000Z");
+
+    function seed(phone: string, attempts: number, createdAt: Date): string {
+      const participantId = randomUUID();
+      memorySnapshot().participants.push({
+        id: participantId,
+        encrypted_phone: encryptString(phone, key),
+        phone_lookup_hash: randomUUID().replaceAll("-", "") + randomUUID().replaceAll("-", "").slice(0, 32),
+        encrypted_name: encryptString("Ada", key),
+        status: "active",
+        created_at: createdAt,
+        updated_at: createdAt,
+      });
+      memorySnapshot().sessions.push({
+        id: randomUUID(),
+        participant_id: participantId,
+        state: "pending_invite",
+        current_question_index: 0,
+        service_window_expires_at: null,
+        created_at: createdAt,
+        updated_at: createdAt,
+        completed_at: null,
+      });
+      const outboxId = randomUUID();
+      memorySnapshot().outbox.push({
+        id: outboxId,
+        participant_id: participantId,
+        message_type: "template_invite",
+        payload_json: JSON.stringify({ templateName: "manatee_invite" }),
+        status: "pending",
+        attempts,
+        created_at: createdAt,
+        sent_at: null,
+      });
+      return outboxId;
+    }
+
+    const failedId = seed(failTo, OUTBOX_MAX_ATTEMPTS - 1, earlier);
+    const sentId = seed(ALLOWED, 0, later);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      let body: unknown;
+      if (typeof init?.body === "string") {
+        body = JSON.parse(init.body) as unknown;
+      }
+      calls.push({ url, method: init?.method ?? "GET", body });
+      const to = (body as { to?: string } | undefined)?.to;
+      if (to === failTo.replace("+", "")) {
+        return new Response("nope", { status: 500 });
+      }
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    await expect(new InterviewService(config).processOutbox()).resolves.toBeUndefined();
+    expect(unexpectedSql()).toEqual([]);
+    const failed = memorySnapshot().outbox.find((row) => row.id === failedId);
+    const sent = memorySnapshot().outbox.find((row) => row.id === sentId);
+    expect(failed?.attempts).toBe(OUTBOX_MAX_ATTEMPTS);
+    expect(failed?.status).toBe("failed");
+    expect(sent?.status).toBe("sent");
+    expect(graphCalls()).toHaveLength(2);
+    expect(logs.join("\n")).not.toContain(failTo.slice(1));
+    expect(logs.join("\n")).not.toContain(ALLOWED.slice(1));
   });
 });

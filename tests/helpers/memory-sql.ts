@@ -41,11 +41,26 @@ export type MemoryOutbox = {
   sent_at: Date | null;
 };
 
+export type MemoryResponse = {
+  session_id: string;
+  question_index: number;
+  encrypted_transcript: string | null;
+};
+
+export type MemoryTile = {
+  session_id: string;
+  color_hex: string;
+  public_slug: string;
+};
+
 export type MemoryStore = {
   participants: MemoryParticipant[];
   consents: MemoryConsent[];
   sessions: MemorySession[];
   outbox: MemoryOutbox[];
+  responses: MemoryResponse[];
+  artwork: MemoryTile[];
+  jobs: Array<{ job_type: string; payload_json: string }>;
   webhookEvents: Array<{ event_key: string; payload_hash: string }>;
   suppression: Array<{ phone_lookup_hash: string; expires_at: Date | null }>;
 };
@@ -62,6 +77,9 @@ function emptyStore(): MemoryStore {
     consents: [],
     sessions: [],
     outbox: [],
+    responses: [],
+    artwork: [],
+    jobs: [],
     webhookEvents: [],
     suppression: [],
   };
@@ -168,6 +186,14 @@ function execute(
     return { recordset: [{ id }] };
   }
 
+  if (sql.includes("insert into jobs")) {
+    store.jobs.push({
+      job_type: String(inputs.get("job_type")),
+      payload_json: String(inputs.get("payload_json")),
+    });
+    return { recordset: [] };
+  }
+
   if (sql.includes("insert into outbox_messages")) {
     store.outbox.push({
       id: randomUUID(),
@@ -191,6 +217,31 @@ function execute(
     return { recordset: [{ found: 1 }] };
   }
 
+  if (sql.includes("from consents")) {
+    const participantId = String(inputs.get("participant_id"));
+    const rows = store.consents.filter(
+      (consent) => consent.participant_id === participantId && consent.withdrawn_at === null,
+    );
+    return { recordset: rows.map((consent) => ({ consent_type: consent.consent_type })) };
+  }
+
+  if (sql.includes("from participants") && sql.includes("where id = @id")) {
+    const row = store.participants.find((item) => item.id === inputs.get("id"));
+    if (!row) {
+      return { recordset: [] };
+    }
+    return {
+      recordset: [
+        {
+          id: row.id,
+          encrypted_phone: row.encrypted_phone,
+          phone_lookup_hash: row.phone_lookup_hash,
+          status: row.status,
+        },
+      ],
+    };
+  }
+
   if (sql.includes("from participants") && sql.includes("phone_lookup_hash")) {
     const hash = String(inputs.get("hash"));
     const row = store.participants.find((item) => item.phone_lookup_hash === hash);
@@ -203,6 +254,71 @@ function execute(
           id: row.id,
           encrypted_phone: row.encrypted_phone,
           status: row.status,
+        },
+      ],
+    };
+  }
+
+  if (sql.includes("from responses")) {
+    const sessionId = String(inputs.get("session_id"));
+    const rows = store.responses
+      .filter((response) => response.session_id === sessionId && response.encrypted_transcript)
+      .sort((a, b) => a.question_index - b.question_index);
+    return { recordset: rows.map((response) => ({ ...response })) };
+  }
+
+  if (sql.includes("merge responses")) {
+    const sessionId = String(inputs.get("session_id"));
+    const questionIndex = Number(inputs.get("question_index"));
+    const existing = store.responses.find(
+      (response) => response.session_id === sessionId && response.question_index === questionIndex,
+    );
+    const transcript = String(inputs.get("encrypted_transcript"));
+    if (existing) {
+      existing.encrypted_transcript = transcript;
+    } else {
+      store.responses.push({
+        session_id: sessionId,
+        question_index: questionIndex,
+        encrypted_transcript: transcript,
+      });
+    }
+    return { recordset: [] };
+  }
+
+  if (sql.includes("insert into artwork_tiles")) {
+    const sessionId = String(inputs.get("session_id"));
+    store.artwork.push({
+      session_id: sessionId,
+      color_hex: String(inputs.get("color_hex")),
+      public_slug: String(inputs.get("public_slug")),
+    });
+    for (const response of store.responses) {
+      if (response.session_id === sessionId) {
+        response.encrypted_transcript = null;
+      }
+    }
+    const session = store.sessions.find((item) => item.id === sessionId);
+    if (session) {
+      session.state = "complete";
+      session.completed_at = new Date();
+      session.updated_at = new Date();
+    }
+    return { recordset: [] };
+  }
+
+  if (sql.includes("from interview_sessions") && sql.includes("where id = @id")) {
+    const row = store.sessions.find((session) => session.id === inputs.get("id"));
+    if (!row) {
+      return { recordset: [] };
+    }
+    return {
+      recordset: [
+        {
+          id: row.id,
+          state: row.state,
+          participant_id: row.participant_id,
+          service_window_expires_at: row.service_window_expires_at,
         },
       ],
     };
@@ -264,10 +380,22 @@ function execute(
     return { recordset: [] };
   }
 
+  if (sql.includes("state = 'expired'")) {
+    const row = store.sessions.find((session) => session.id === inputs.get("id"));
+    if (row && row.state !== "complete" && row.state !== "opted_out" && row.state !== "expired") {
+      row.state = "expired";
+      row.updated_at = new Date();
+    }
+    return { recordset: [] };
+  }
+
   if (sql.includes("set state = @state")) {
     const row = store.sessions.find((session) => session.id === inputs.get("id"));
     if (row) {
       row.state = String(inputs.get("state"));
+      if (inputs.has("current_question_index")) {
+        row.current_question_index = Number(inputs.get("current_question_index"));
+      }
       row.updated_at = new Date();
     }
     return { recordset: [] };
@@ -294,6 +422,10 @@ function execute(
     const row = store.outbox.find((item) => item.id === inputs.get("id"));
     if (row) {
       row.attempts = Number(inputs.get("attempts"));
+      const status = inputs.get("status");
+      if (typeof status === "string") {
+        row.status = status;
+      }
     }
     return { recordset: [] };
   }

@@ -52,7 +52,13 @@ export class JobWorker {
   private async tick(): Promise<void> {
     try {
       await this.interview.processOutbox();
+    } catch (err) {
+      logError("Outbox processing failed", {
+        error: err instanceof Error ? err.message : "unknown",
+      });
+    }
 
+    try {
       for (;;) {
         const job = await this.jobs.claimNext(this.workerId);
         if (!job) {

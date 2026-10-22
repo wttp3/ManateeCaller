@@ -89,4 +89,57 @@ describe("background worker flags", () => {
     }
     expect(worker.isPolling()).toBe(false);
   });
+
+  it("still claims jobs when outbox processing throws", async () => {
+    const logs: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((line) => {
+      logs.push(String(line));
+    });
+    delete process.env.DEPLOY_SMOKE_MODE;
+    delete process.env.DISABLE_BACKGROUND_JOBS;
+    let calls = 0;
+    getPool.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          request() {
+            return {
+              query: async () => {
+                throw new Error("outbox down");
+              },
+            };
+          },
+        };
+      }
+      return {
+        request() {
+          return {
+            input() {
+              return this;
+            },
+            query: async () => ({ recordset: [] }),
+          };
+        },
+      };
+    });
+
+    const worker = new JobWorker(
+      loadConfig(
+        testEnv({
+          JOB_POLL_INTERVAL_MS: "60000",
+          PILOT_ALLOWED_SENDERS: "+447700900000",
+        }),
+      ),
+    );
+    try {
+      worker.start();
+      await vi.waitFor(() => {
+        expect(calls).toBeGreaterThanOrEqual(2);
+      });
+    } finally {
+      worker.stop();
+    }
+    expect(logs.join("\n")).toContain("Outbox processing failed");
+    expect(logs.join("\n")).not.toContain("Job completed");
+  });
 });

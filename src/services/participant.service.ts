@@ -3,8 +3,9 @@ import { sql, getPool } from "../db/pool.js";
 import { decryptString, encryptString, hmacHex, randomSlug } from "../utils/crypto.js";
 import { combineTranscripts, transcriptToColor } from "../utils/color.js";
 import { CONSENT_TEXT_VERSION } from "../interview/constants.js";
-import { isPilotSenderAllowed } from "../pilot/allowlist.js";
+import { isPilotSenderAllowed, maskPhone } from "../pilot/allowlist.js";
 import { normalizePhone, isValidE164 } from "../utils/phone.js";
+import { logInfo } from "../utils/logger.js";
 
 export class ParticipantService {
   constructor(private readonly config: AppConfig) {}
@@ -67,7 +68,6 @@ export class ParticipantService {
         `);
 
       const participantId = participantResult.recordset[0].id as string;
-      await this.insertConsents(transaction, participantId);
 
       const sessionResult = await new sql.Request(transaction)
         .input("participant_id", sql.UniqueIdentifier, participantId)
@@ -79,7 +79,7 @@ export class ParticipantService {
 
       const sessionId = sessionResult.recordset[0].id as string;
 
-      if (this.config.whatsappTemplateInvitesEnabled) {
+      if (this.config.whatsappTemplateInvitesEnabled && isPilotSenderAllowed(phone, this.config.pilotAllowedSenders)) {
         await new sql.Request(transaction)
           .input("participant_id", sql.UniqueIdentifier, participantId)
           .input("message_type", sql.NVarChar(64), "template_invite")
@@ -92,6 +92,10 @@ export class ParticipantService {
             INSERT INTO outbox_messages (participant_id, message_type, payload_json)
             VALUES (@participant_id, @message_type, @payload_json)
           `);
+      } else if (this.config.whatsappTemplateInvitesEnabled) {
+        logInfo("Not queueing template invite for a number outside the pilot allowlist", {
+          to: maskPhone(phone),
+        });
       }
 
       await transaction.commit();
@@ -103,7 +107,8 @@ export class ParticipantService {
   }
 
   /**
-   * Message-first opt-in. Records consent and opens a session. Does not queue a template.
+   * Message-first opt-in. Opens a session without a template.
+   * Consent rows are recorded by the caller once the keyword is accepted.
    */
   async createFromKeyword(phone: string): Promise<{ participantId: string; sessionId: string }> {
     const normalized = normalizePhone(phone);
@@ -135,7 +140,6 @@ export class ParticipantService {
         `);
 
       const participantId = participantResult.recordset[0].id as string;
-      await this.insertConsents(transaction, participantId);
 
       const sessionResult = await new sql.Request(transaction)
         .input("participant_id", sql.UniqueIdentifier, participantId)
@@ -155,9 +159,24 @@ export class ParticipantService {
     }
   }
 
-  private async insertConsents(transaction: sql.Transaction, participantId: string): Promise<void> {
+  /** Consent is stored only after an allowlisted sender messages the keyword. */
+  async recordKeywordConsents(participantId: string): Promise<void> {
+    const pool = await getPool(this.config);
+    const existing = await pool
+      .request()
+      .input("participant_id", sql.UniqueIdentifier, participantId)
+      .query(`
+        SELECT consent_type FROM consents
+        WHERE participant_id = @participant_id AND withdrawn_at IS NULL
+      `);
+    const have = new Set(existing.recordset.map((row: { consent_type: string }) => row.consent_type));
+
     for (const consentType of ["whatsapp_contact", "voice_processing", "privacy_notice"] as const) {
-      await new sql.Request(transaction)
+      if (have.has(consentType)) {
+        continue;
+      }
+      await pool
+        .request()
         .input("participant_id", sql.UniqueIdentifier, participantId)
         .input("consent_type", sql.NVarChar(64), consentType)
         .input("consent_text_version", sql.NVarChar(32), CONSENT_TEXT_VERSION)
@@ -249,7 +268,7 @@ export class ParticipantService {
 export class ArtworkService {
   constructor(private readonly config: AppConfig) {}
 
-  async finalizeSession(sessionId: string): Promise<string> {
+  async draftTile(sessionId: string): Promise<{ colorHex: string; publicSlug: string }> {
     const pool = await getPool(this.config);
     const responses = await pool
       .request()
@@ -271,16 +290,21 @@ export class ArtworkService {
     }
 
     const combined = combineTranscripts(transcripts);
-    const colorHex = transcriptToColor(combined, this.config.tileHmacKey);
-    const publicSlug = randomSlug(12);
+    return {
+      colorHex: transcriptToColor(combined, this.config.tileHmacKey),
+      publicSlug: randomSlug(12),
+    };
+  }
 
+  async persistTile(sessionId: string, tile: { colorHex: string; publicSlug: string }): Promise<void> {
+    const pool = await getPool(this.config);
     const transaction = new sql.Transaction(pool);
     await transaction.begin();
     try {
       await new sql.Request(transaction)
         .input("session_id", sql.UniqueIdentifier, sessionId)
-        .input("color_hex", sql.Char(7), colorHex)
-        .input("public_slug", sql.Char(12), publicSlug)
+        .input("color_hex", sql.Char(7), tile.colorHex)
+        .input("public_slug", sql.Char(12), tile.publicSlug)
         .query(`
           INSERT INTO artwork_tiles (session_id, color_hex, public_slug)
           VALUES (@session_id, @color_hex, @public_slug);
@@ -293,11 +317,16 @@ export class ArtworkService {
         `);
 
       await transaction.commit();
-      return publicSlug;
     } catch (err) {
       await transaction.rollback();
       throw err;
     }
+  }
+
+  async finalizeSession(sessionId: string): Promise<string> {
+    const tile = await this.draftTile(sessionId);
+    await this.persistTile(sessionId, tile);
+    return tile.publicSlug;
   }
 
   async listTiles(limit = 500): Promise<Array<{ colorHex: string; publicSlug: string; createdAt: string }>> {
