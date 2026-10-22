@@ -21,6 +21,7 @@ vi.mock("../../src/db/pool.js", async () => {
 
 import { createApp } from "../../src/app.js";
 import { loadConfig } from "../../src/config/index.js";
+import { CONSENT_TEXT_VERSION } from "../../src/interview/constants.js";
 import { INBOUND_IGNORED_MESSAGE } from "../../src/pilot/allowlist.js";
 import { OUTBOX_MAX_ATTEMPTS, InterviewService } from "../../src/services/interview.service.js";
 import { encryptString } from "../../src/utils/crypto.js";
@@ -213,6 +214,9 @@ describe("pilot keyword opt-in", () => {
       "voice_processing",
       "whatsapp_contact",
     ]);
+    expect(store.consents.every((consent) => consent.consent_text_version === CONSENT_TEXT_VERSION)).toBe(
+      true,
+    );
     expect(store.outbox).toHaveLength(0);
     const session = store.sessions[0];
     expect(session?.state).toBe("awaiting_voice_q1");

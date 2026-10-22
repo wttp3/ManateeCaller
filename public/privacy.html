@@ -10,6 +10,7 @@
   <main class="container prose">
     <h1>Privacy notice</h1>
     <p>This note is for colleagues in the ManateeCaller internal pilot. It says what we collect, why, and how you join, opt out, or delete your data.</p>
+    <p>This notice is version <strong>2026-10-22-v1</strong>, dated 22 October 2026. When you send <strong>I'm in</strong>, we store that version id with your consent record.</p>
 
     <h2>Who we are</h2>
     <p><strong>Straight Six Limited</strong> is the controller.</p>
@@ -21,11 +22,13 @@
       SE21 8EN
     </p>
     <p>Email <a href="mailto:hello@manateecaller.net">hello@manateecaller.net</a>.</p>
-    <p>The pilot runs on a server in the UK or the EU.</p>
+    <p>Where we host our own copy of this pilot is still to be confirmed.</p>
+    <p>Taking part is voluntary. Declining, or leaving, has no work consequence.</p>
 
     <h2>Why we use your data</h2>
     <p>ManateeCaller is an internal art experiment. You answer a few questions with WhatsApp voice notes. Finished answers become one colour on a shared mosaic.</p>
-    <p>The lawful basis is consent. We record that consent when you send <strong>I'm in</strong> on WhatsApp. That phrase is the default way to join. The signup page asks you to read this notice, confirm you are 18 or over, and tick the boxes before it saves a name and number. Those ticks are not the stored consent record. The record is written when you send the phrase.</p>
+    <p>The lawful basis for the interview is consent. We record that consent when you send <strong>I'm in</strong> on WhatsApp. That phrase is the default way to join. The signup page asks you to read this notice, confirm you are 18 or over, and tick the boxes before it saves a name and number. Those ticks are not the stored consent record. The record is written when you send the phrase.</p>
+    <p>Sending <strong>STOP</strong> withdraws that consent. Withdrawing consent does not affect processing that already happened.</p>
 
     <h2>What we collect</h2>
     <ul>
@@ -39,14 +42,15 @@
     <p>We only reply to numbers on the colleague list for this pilot.</p>
 
     <h2>How to join, opt out, or delete</h2>
-    <p>Send these as their own WhatsApp message. Capitals and extra spaces do not matter. In this pilot you start the chat. We reply in that chat.</p>
+    <p>Send these as their own WhatsApp message. Capitals and extra spaces do not matter. By default, template invites are off, so you start the chat and we reply in that chat.</p>
     <ul>
       <li><strong>I'm in</strong> joins you. We record consent and start the interview. If you had opted out, this turns the same record back on. If you had deleted your data, this starts a new record.</li>
       <li><strong>STOP</strong> opts you out. <strong>unsubscribe</strong>, <strong>cancel</strong>, and <strong>opt out</strong> do the same. We stop the interview, cancel messages we have not sent, and ask WhatsApp to delete voice notes we still have a file id for. Your record stays, with consent marked withdrawn. We send one confirmation if the chat window is still open. To take part again, send <strong>I'm in</strong>.</li>
-      <li><strong>DELETE MY DATA</strong> deletes your data, and it has to come from your own number. We remove your number, name, transcripts, sessions, and consent records, and we ask WhatsApp to delete voice notes we still have a file id for. Any colour already on the mosaic stays, with the link to you removed. We keep a keyed hash of the number, with no expiry date, and a note that the deletion happened. We send one confirmation if the chat window is still open. Sending <strong>I'm in</strong> later removes that block and starts a new record. The deletion note stays.</li>
+      <li><strong>DELETE MY DATA</strong> deletes your data, and it has to come from your own number. We remove your number, name, transcripts, sessions, and consent records, and we ask WhatsApp to delete voice notes we still have a file id for. Any colour already on the mosaic stays, with the link to you removed. We keep a keyed hash of the number, with no expiry date, and compliance notes. We send one confirmation if the chat window is still open. Sending <strong>I'm in</strong> later removes that block and starts a new record. The compliance notes stay.</li>
     </ul>
     <p>We keep a chat window of 24 hours. That is the default. A message from you during an active interview refreshes it. We can send the confirmation for STOP or DELETE MY DATA only while a window is already open. Both commands still take effect after the window has closed. If the interview has been marked expired, send <strong>STOP</strong>, then <strong>I'm in</strong>, to start again.</p>
     <p>After STOP or DELETE MY DATA, joining again is by sending <strong>I'm in</strong> on WhatsApp.</p>
+    <p>After STOP or DELETE MY DATA we still keep a keyed hash of your number, and compliance notes, such as a record of each STOP and each erasure. We keep them so we can honour the opt-out or deletion, and show that we did. The lawful basis is legitimate interests. You can object to that by emailing <a href="mailto:hello@manateecaller.net">hello@manateecaller.net</a>.</p>
 
     <h2>How long we keep it</h2>
     <p>There is no automatic expiry for your record.</p>
@@ -55,17 +59,27 @@
       <li><strong>Transcripts.</strong> Kept encrypted until your colour is saved, then cleared. If you never finish, they stay until you send DELETE MY DATA.</li>
       <li><strong>Number, name, and consent records.</strong> Kept until you send DELETE MY DATA. STOP leaves them in place, with consent marked withdrawn.</li>
       <li><strong>Colour tile.</strong> Kept, with no end date. DELETE MY DATA removes the link to you and leaves the colour.</li>
-      <li><strong>After deletion.</strong> The number itself is gone. The keyed hash and the deletion note stay, as described above.</li>
+      <li><strong>After deletion.</strong> The number itself is gone. The keyed hash and the compliance notes stay, as described above.</li>
     </ul>
 
     <h2>Who else handles it</h2>
     <ul>
-      <li><strong>Meta WhatsApp Cloud API</strong> carries the messages and voice notes.</li>
-      <li><strong>ElevenLabs</strong> turns voice notes into text. Zero retention is off by default. While it is off, audio we send may be kept by ElevenLabs under its <a href="https://elevenlabs.io/privacy">standard privacy policy</a>. If zero retention is switched on, we ask ElevenLabs not to log that audio.</li>
+      <li><strong>Meta WhatsApp Cloud API</strong> (<a href="https://graph.facebook.com">graph.facebook.com</a>) carries the messages and voice notes.</li>
+      <li><strong>ElevenLabs</strong> (<a href="https://api.elevenlabs.io">api.elevenlabs.io</a>) turns voice notes into text. Zero retention is off by default, which leaves logging on. While it is off, audio we send may be kept by ElevenLabs under its <a href="https://elevenlabs.io/privacy">standard privacy policy</a>. If zero retention is switched on, we ask ElevenLabs not to log that audio. DELETE MY DATA does not reach any copy ElevenLabs keeps while logging is on. Email <a href="mailto:hello@manateecaller.net">hello@manateecaller.net</a> if you want to ask about a copy ElevenLabs may still hold.</li>
+    </ul>
+
+    <h2>International transfers</h2>
+    <p>Meta (WhatsApp, at graph.facebook.com) and ElevenLabs (at api.elevenlabs.io) may process personal data outside the UK and the EEA.</p>
+    <p>We rely on the safeguards in those providers’ terms. Where a destination has a UK adequacy decision, including the UK–US data bridge for a certified US organisation, that decision is the safeguard. Otherwise their terms use Standard Contractual Clauses (SCCs) and the UK International Data Transfer Addendum, also called the IDTA.</p>
+    <ul>
+      <li><a href="https://www.whatsapp.com/legal/business-solution-terms/">WhatsApp Business Solution Terms</a></li>
+      <li><a href="https://www.facebook.com/legal/terms/Meta-Global-Processor-Terms">Meta Global Processor Terms</a>, including the <a href="https://www.facebook.com/legal/terms/Meta-Global-Processor-Terms/Europe">European Region terms</a></li>
+      <li><a href="https://elevenlabs.io/terms-of-use-eu">ElevenLabs UK and EEA terms</a> and the <a href="https://elevenlabs.io/dpa">ElevenLabs data processing addendum</a></li>
     </ul>
 
     <h2>Your rights</h2>
-    <p>You can opt out with STOP and delete your data with DELETE MY DATA, as above. Email <a href="mailto:hello@manateecaller.net">hello@manateecaller.net</a> if you want to ask about the data we hold.</p>
+    <p>You can ask for access to the data we hold, for rectification if it is wrong, for restriction of how we use it, and for portability of a copy you can take with you. Email <a href="mailto:hello@manateecaller.net">hello@manateecaller.net</a>. You can also object to the legitimate interests described above.</p>
+    <p>You can opt out with STOP and delete your data with DELETE MY DATA, as above. Withdrawing consent does not affect earlier processing.</p>
     <p>You can complain to the Information Commissioner's Office: <a href="https://ico.org.uk/make-a-complaint/">ico.org.uk/make-a-complaint</a>.</p>
 
     <p><a href="/">Back to signup</a></p>
