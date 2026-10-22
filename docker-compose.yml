@@ -3,8 +3,7 @@ services:
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
       ACCEPT_EULA: "Y"
-      # Replace changeme with a local SA password before starting SQL Server.
-      MSSQL_SA_PASSWORD: "changeme"
+      MSSQL_SA_PASSWORD: "YourStrong!Passw0rd"
     ports:
       - "1433:1433"
     volumes:
