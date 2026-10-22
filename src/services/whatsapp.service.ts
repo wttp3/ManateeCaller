@@ -1,11 +1,14 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { AppConfig } from "../config/index.js";
 import {
+  OPT_OUT_REFUSED_MESSAGE,
   OUTBOUND_REFUSED_MESSAGE,
+  OptOutSendRefusedError,
   PilotSendRefusedError,
   isPilotSenderAllowed,
   maskPhone,
 } from "../pilot/allowlist.js";
+import { ParticipantService } from "./participant.service.js";
 import { decryptString } from "../utils/crypto.js";
 import { logInfo } from "../utils/logger.js";
 
@@ -16,14 +19,17 @@ export class WhatsAppService {
     return `https://graph.facebook.com/${this.config.whatsappApiVersion}/${this.config.whatsappPhoneNumberId}`;
   }
 
-  async sendText(toPhone: string, body: string): Promise<void> {
-    await this.postMessage({
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to: toPhone.replace(/^\+/, ""),
-      type: "text",
-      text: { body },
-    });
+  async sendText(toPhone: string, body: string, options?: { bypassOptOut?: boolean }): Promise<void> {
+    await this.postMessage(
+      {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: toPhone.replace(/^\+/, ""),
+        type: "text",
+        text: { body },
+      },
+      options,
+    );
   }
 
   async sendTemplate(toPhone: string, templateName: string): Promise<void> {
@@ -58,7 +64,8 @@ export class WhatsAppService {
       headers: { Authorization: `Bearer ${this.config.whatsappAccessToken}` },
     });
     if (!response.ok && response.status !== 404) {
-      throw new Error(`Failed to delete media: ${response.status}`);
+      const detail = await response.text().catch(() => "");
+      throw new Error(`Failed to delete media: ${response.status} ${detail.slice(0, 300)}`);
     }
   }
 
@@ -105,8 +112,11 @@ export class WhatsAppService {
     return decryptString(encryptedPhone, this.config.dataEncryptionKey);
   }
 
-  private async postMessage(payload: Record<string, unknown>): Promise<void> {
-    this.assertRecipientAllowed(payload.to);
+  private async postMessage(
+    payload: Record<string, unknown>,
+    options?: { bypassOptOut?: boolean },
+  ): Promise<void> {
+    await this.assertRecipientAllowed(payload.to, options);
     const response = await fetch(`${this.baseUrl()}/messages`, {
       method: "POST",
       headers: {
@@ -121,13 +131,31 @@ export class WhatsAppService {
     }
   }
 
-  /** Hard guard: no WhatsApp send leaves the process for a number outside the pilot allowlist. */
-  private assertRecipientAllowed(to: unknown): void {
+  /**
+   * Hard guard: nothing leaves the process for a number outside the allowlist,
+   * or for an opted-out or blocked participant. The single opt-out or erasure
+   * confirmation sets bypassOptOut; the allowlist still applies.
+   */
+  private async assertRecipientAllowed(to: unknown, options?: { bypassOptOut?: boolean }): Promise<void> {
     if (typeof to !== "string" || !isPilotSenderAllowed(to, this.config.pilotAllowedSenders)) {
       logInfo(OUTBOUND_REFUSED_MESSAGE, {
         to: typeof to === "string" ? maskPhone(to) : "••••",
       });
       throw new PilotSendRefusedError();
+    }
+    if (options?.bypassOptOut) {
+      return;
+    }
+
+    const participants = new ParticipantService(this.config);
+    const lookupHash = participants.phoneLookupHash(to);
+    const [suppressed, participant] = await Promise.all([
+      participants.isSuppressed(lookupHash),
+      participants.getParticipantByLookup(lookupHash),
+    ]);
+    if (suppressed || participant?.status === "opted_out" || participant?.status === "blocked") {
+      logInfo(OPT_OUT_REFUSED_MESSAGE, { to: maskPhone(to) });
+      throw new OptOutSendRefusedError();
     }
   }
 }

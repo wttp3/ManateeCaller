@@ -57,6 +57,20 @@ const configSchema = z.object({
         return z.NEVER;
       }
     }),
+  erasureKeyword: z
+    .string()
+    .optional()
+    .transform((value) => {
+      const keyword = value?.trim() ?? "";
+      return keyword.length > 0 ? keyword : "DELETE MY DATA";
+    }),
+  erasureAdminToken: z
+    .string()
+    .optional()
+    .transform((value) => {
+      const token = value?.trim() ?? "";
+      return token.length > 0 ? token : null;
+    }),
   elevenLabsApiKey: z.string().min(1),
   elevenLabsEnableZeroRetention: z
     .enum(["true", "false"])
@@ -90,6 +104,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     whatsappApiVersion: env.WHATSAPP_API_VERSION,
     optInKeyword: env.OPT_IN_KEYWORD,
     pilotAllowedSenders: env.PILOT_ALLOWED_SENDERS,
+    erasureKeyword: env.ERASURE_KEYWORD,
+    erasureAdminToken: env.ERASURE_ADMIN_TOKEN,
     elevenLabsApiKey: env.ELEVENLABS_API_KEY,
     elevenLabsEnableZeroRetention: env.ELEVENLABS_ENABLE_ZERO_RETENTION,
     dataEncryptionKey: env.DATA_ENCRYPTION_KEY,
@@ -123,6 +139,8 @@ export function redactConfig(config: AppConfig): Record<string, string | number 
     whatsappApiVersion: config.whatsappApiVersion,
     optInKeyword: config.optInKeyword,
     pilotAllowedSenderCount: config.pilotAllowedSenders.length,
+    erasureKeyword: config.erasureKeyword,
+    erasureAdminConfigured: config.erasureAdminToken !== null,
     elevenLabsEnableZeroRetention: config.elevenLabsEnableZeroRetention,
     sessionTimeoutHours: config.sessionTimeoutHours,
     maxVoiceNoteBytes: config.maxVoiceNoteBytes,

@@ -30,6 +30,14 @@ There is no approved `manatee_invite` template. A colleague opts in by sending t
 
 ## Opt-out (`STOP`)
 
+`STOP`, `unsubscribe`, `cancel`, and `opt out` opt the sender out in every state. Ignore case and extra spaces.
+
 > You've been unsubscribed from ManateeCaller. We won't message you again.
 
-Do not send follow-ups after STOP. Record the suppression token and stop all outbound messages.
+Send that confirmation only when this request is the one that opts them out and the 24-hour window is still open. Cancel pending invites and jobs, including jobs that only name the session id. Delete pending voice-note media (best effort) and keep only `mediaId` on the cancelled job so a later erasure can retry. Do not send anything else. A later opt-in keyword can opt them back in. Do not let a late job or outbox write change `opted_out`, `cancelled`, or an erased row. A skipped voice-note job still deletes its WhatsApp media.
+
+## Erasure
+
+The sender can text `DELETE MY DATA` (or `ERASURE_KEYWORD`). Delete WhatsApp media for their audio ids first (best effort), then their participant, consents, sessions, transcripts, and audio references. Anonymise their mosaic tile and remove their webhook rows. Also delete jobs that only name the session id. Confirm once if the window is open. The erasure token blocks template invites and other outbound contact we start. An inbound opt-in keyword is fresh consent and starts a new participant:
+
+> Your ManateeCaller data has been deleted. We won't message you again.

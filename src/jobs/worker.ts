@@ -73,7 +73,14 @@ export class JobWorker {
               mediaId: string;
             });
           } else if (job.jobType === "finalize_interview") {
-            await this.interview.finalizeInterview(job.payload as { sessionId: string; phone: string });
+            const payload = job.payload as { sessionId?: string; participantId?: string };
+            if (!payload.sessionId) {
+              throw new Error("Job payload missing session");
+            }
+            await this.interview.finalizeInterview({
+              sessionId: payload.sessionId,
+              participantId: payload.participantId,
+            });
           }
           await this.jobs.complete(job.id);
           logInfo("Job completed", { jobType: job.jobType });

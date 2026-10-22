@@ -7,6 +7,10 @@ export type RecordedCall = {
 
 const realFetch = globalThis.fetch.bind(globalThis);
 
+export function passthroughFetch(input: unknown, init?: RequestInit): Promise<Response> {
+  return realFetch(input as RequestInfo, init);
+}
+
 export function installFetchMock(): RecordedCall[] {
   const calls: RecordedCall[] = [];
   vi.stubGlobal(

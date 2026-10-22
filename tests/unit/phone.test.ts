@@ -15,6 +15,13 @@ describe("phone utils", () => {
     expect(normalizePhone("+49 0 15123456789")).toBe("+4915123456789");
   });
 
+  it("keeps a parenthesised trunk 0 for Italy", () => {
+    expect(normalizePhone("+39 (0) 6 1234 5678")).toBe("+390612345678");
+    expect(normalizePhone("+39 (0)6 12345678")).toBe("+390612345678");
+    expect(normalizePhone("+39 06 12345678")).toBe("+390612345678");
+    expect(isValidE164(normalizePhone("+39 (0) 6 1234 5678"))).toBe(true);
+  });
+
   it("accepts valid E.164 numbers and rejects a trunk 0 left after the country code", () => {
     expect(isValidE164("+447123456789")).toBe(true);
     expect(isValidE164("+447700900000")).toBe(true);

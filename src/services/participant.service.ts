@@ -211,6 +211,244 @@ export class ParticipantService {
     };
   }
 
+  async getParticipantById(participantId: string): Promise<{
+    id: string;
+    encryptedPhone: string;
+    status: string;
+    lookupHash: string;
+  } | null> {
+    const pool = await getPool(this.config);
+    const result = await pool
+      .request()
+      .input("id", sql.UniqueIdentifier, participantId)
+      .query(`
+        SELECT id, encrypted_phone, status, phone_lookup_hash
+        FROM participants
+        WHERE id = @id
+      `);
+    const row = result.recordset[0];
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id as string,
+      encryptedPhone: row.encrypted_phone as string,
+      status: row.status as string,
+      lookupHash: row.phone_lookup_hash as string,
+    };
+  }
+
+  async getSuppression(lookupHash: string): Promise<{ reason: string } | null> {
+    const pool = await getPool(this.config);
+    const result = await pool
+      .request()
+      .input("hash", sql.Char(64), lookupHash)
+      .query(`
+        SELECT reason
+        FROM suppression_tokens
+        WHERE phone_lookup_hash = @hash
+          AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
+      `);
+    const reason = result.recordset[0]?.reason as string | undefined;
+    return reason ? { reason } : null;
+  }
+
+  /**
+   * An inbound opt-in keyword is fresh consent. Clear stop and erasure tokens so
+   * that keyword can start a participant. Template invites stay blocked until then.
+   */
+  async clearKeywordSuppression(lookupHash: string): Promise<void> {
+    const pool = await getPool(this.config);
+    await pool
+      .request()
+      .input("hash", sql.Char(64), lookupHash)
+      .query(`
+        DELETE FROM suppression_tokens
+        WHERE phone_lookup_hash = @hash
+          AND reason IN ('stop', 'erasure_request')
+      `);
+  }
+
+  /**
+   * Opt out in every state, including when there is no participant yet.
+   * The status change and the window check run in one transaction. Only the call
+   * that actually moves the participant to opted_out may send a confirmation.
+   * Pending jobs are matched by participant_id or by a legacy sessionId in the payload.
+   */
+  async recordStop(
+    participantId: string | null,
+    lookupHash: string,
+  ): Promise<{ sendConfirmation: boolean }> {
+    const pool = await getPool(this.config);
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+    try {
+      const result = await new sql.Request(transaction)
+        .input("participant_id", sql.UniqueIdentifier, participantId)
+        .input("lookup_hash", sql.Char(64), lookupHash)
+        .query(`
+          DECLARE @transitioned INT = 0;
+          DECLARE @window_open INT = 0;
+
+          IF @participant_id IS NOT NULL
+          BEGIN
+            SELECT @window_open = CASE WHEN EXISTS (
+              SELECT 1
+              FROM interview_sessions
+              WHERE participant_id = @participant_id
+                AND service_window_expires_at > SYSUTCDATETIME()
+            ) THEN 1 ELSE 0 END;
+
+            UPDATE participants
+            SET status = 'opted_out', updated_at = SYSUTCDATETIME()
+            WHERE id = @participant_id AND status <> 'opted_out';
+
+            SET @transitioned = @@ROWCOUNT;
+          END;
+
+          UPDATE interview_sessions
+          SET state = 'opted_out', updated_at = SYSUTCDATETIME()
+          WHERE participant_id = @participant_id
+            AND state NOT IN ('complete');
+
+          UPDATE consents
+          SET withdrawn_at = SYSUTCDATETIME()
+          WHERE participant_id = @participant_id
+            AND withdrawn_at IS NULL;
+
+          UPDATE outbox_messages
+          SET status = 'cancelled'
+          WHERE participant_id = @participant_id
+            AND status = 'pending';
+
+          -- Drop phone numbers and message ids. Keep mediaId so erasure can still
+          -- ask Meta to delete a voice note that has not been transcribed, and
+          -- stamp participant_id so a legacy sessionId row stays owned by this person.
+          UPDATE jobs
+          SET status = 'cancelled',
+              participant_id = COALESCE(participant_id, @participant_id),
+              payload_json = CASE
+                WHEN ISJSON(payload_json) = 1 AND JSON_VALUE(payload_json, '$.mediaId') IS NOT NULL
+                  THEN JSON_MODIFY(N'{}', '$.mediaId', JSON_VALUE(payload_json, '$.mediaId'))
+                ELSE N'{}'
+              END,
+              updated_at = SYSUTCDATETIME()
+          WHERE status IN ('pending', 'processing')
+            AND (
+              participant_id = @participant_id
+              OR TRY_CONVERT(uniqueidentifier, JSON_VALUE(payload_json, '$.participantId')) = @participant_id
+              OR TRY_CONVERT(uniqueidentifier, JSON_VALUE(payload_json, '$.sessionId')) IN (
+                SELECT id FROM interview_sessions WHERE participant_id = @participant_id
+              )
+            );
+
+          IF NOT EXISTS (SELECT 1 FROM suppression_tokens WHERE phone_lookup_hash = @lookup_hash)
+            INSERT INTO suppression_tokens (phone_lookup_hash, reason)
+            VALUES (@lookup_hash, 'stop');
+
+          INSERT INTO compliance_records (phone_lookup_hash, action)
+          VALUES (@lookup_hash, 'stop_received');
+
+          SELECT @transitioned AS transitioned, @window_open AS window_open;
+        `);
+      await transaction.commit();
+      const row = result.recordset[0];
+      const transitioned = Number(row?.transitioned ?? 0) === 1;
+      const windowOpen = Number(row?.window_open ?? 0) === 1;
+      return { sendConfirmation: transitioned && windowOpen };
+    } catch (err) {
+      await transaction.rollback();
+      throw err;
+    }
+  }
+
+  /** Drop a stop suppression, mark the participant active, and open a new session. */
+  async reopenAfterOptOut(participantId: string, lookupHash: string): Promise<string> {
+    const pool = await getPool(this.config);
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+    try {
+      await new sql.Request(transaction)
+        .input("hash", sql.Char(64), lookupHash)
+        .query(`
+          DELETE FROM suppression_tokens
+          WHERE phone_lookup_hash = @hash AND reason = 'stop'
+        `);
+
+      await new sql.Request(transaction)
+        .input("participant_id", sql.UniqueIdentifier, participantId)
+        .query(`
+          UPDATE participants
+          SET status = 'active', updated_at = SYSUTCDATETIME()
+          WHERE id = @participant_id
+        `);
+
+      const inserted = await new sql.Request(transaction)
+        .input("participant_id", sql.UniqueIdentifier, participantId)
+        .input("hours", sql.Int, this.config.sessionTimeoutHours)
+        .query(`
+          INSERT INTO interview_sessions (participant_id, state, service_window_expires_at)
+          OUTPUT INSERTED.id
+          VALUES (@participant_id, 'awaiting_opt_in', DATEADD(hour, @hours, SYSUTCDATETIME()))
+        `);
+
+      const sessionId = inserted.recordset[0]?.id as string | undefined;
+      if (!sessionId) {
+        throw new Error("Failed to reopen session");
+      }
+      await transaction.commit();
+      return sessionId;
+    } catch (err) {
+      await transaction.rollback();
+      throw err;
+    }
+  }
+
+  /**
+   * Media ids still sitting on responses or job payloads. Collected before those
+   * rows are deleted so WhatsApp can be asked to drop the files.
+   */
+  async listMediaIds(participantId: string): Promise<string[]> {
+    const pool = await getPool(this.config);
+    const result = await pool
+      .request()
+      .input("participant_id", sql.UniqueIdentifier, participantId)
+      .query(`
+        /* erasure_media_ids */
+        SELECT DISTINCT media_id
+        FROM (
+          SELECT r.whatsapp_media_id AS media_id
+          FROM responses r
+          INNER JOIN interview_sessions s ON s.id = r.session_id
+          WHERE s.participant_id = @participant_id
+            AND r.whatsapp_media_id IS NOT NULL
+          UNION
+          SELECT JSON_VALUE(j.payload_json, '$.mediaId') AS media_id
+          FROM jobs j
+          WHERE JSON_VALUE(j.payload_json, '$.mediaId') IS NOT NULL
+            AND (
+              j.participant_id = @participant_id
+              OR TRY_CONVERT(uniqueidentifier, JSON_VALUE(j.payload_json, '$.participantId')) = @participant_id
+              OR TRY_CONVERT(uniqueidentifier, JSON_VALUE(j.payload_json, '$.sessionId')) IN (
+                SELECT id FROM interview_sessions WHERE participant_id = @participant_id
+              )
+            )
+        ) AS pending_media
+        WHERE media_id IS NOT NULL
+      `);
+    return result.recordset
+      .map((row) => (typeof row.media_id === "string" ? row.media_id : ""))
+      .filter((mediaId) => mediaId.length > 0);
+  }
+
+  async deleteWebhookEvents(lookupHash: string): Promise<void> {
+    const pool = await getPool(this.config);
+    await pool
+      .request()
+      .input("lookup_hash", sql.Char(64), lookupHash)
+      .query(`DELETE FROM webhook_events WHERE phone_lookup_hash = @lookup_hash`);
+  }
+
   async deleteParticipant(participantId: string): Promise<void> {
     const pool = await getPool(this.config);
     const participant = await pool
@@ -230,21 +468,35 @@ export class ParticipantService {
         .input("participant_id", sql.UniqueIdentifier, participantId)
         .input("lookup_hash", sql.Char(64), lookupHash)
         .query(`
+          /* participant_erased */
           DELETE r FROM responses r
           INNER JOIN interview_sessions s ON s.id = r.session_id
           WHERE s.participant_id = @participant_id;
 
-          UPDATE artwork_tiles SET session_id = NULL
-          FROM artwork_tiles t
-          INNER JOIN interview_sessions s ON s.id = t.session_id
-          WHERE s.participant_id = @participant_id;
+          UPDATE artwork_tiles
+          SET session_id = NULL
+          WHERE session_id IN (
+            SELECT id FROM interview_sessions WHERE participant_id = @participant_id
+          );
+
+          DELETE FROM jobs
+          WHERE participant_id = @participant_id
+            OR TRY_CONVERT(uniqueidentifier, JSON_VALUE(payload_json, '$.participantId')) = @participant_id
+            OR TRY_CONVERT(uniqueidentifier, JSON_VALUE(payload_json, '$.sessionId')) IN (
+              SELECT id FROM interview_sessions WHERE participant_id = @participant_id
+            );
 
           DELETE FROM interview_sessions WHERE participant_id = @participant_id;
           DELETE FROM consents WHERE participant_id = @participant_id;
           DELETE FROM outbox_messages WHERE participant_id = @participant_id;
+          DELETE FROM webhook_events WHERE phone_lookup_hash = @lookup_hash;
           DELETE FROM participants WHERE id = @participant_id;
 
-          IF NOT EXISTS (SELECT 1 FROM suppression_tokens WHERE phone_lookup_hash = @lookup_hash)
+          IF EXISTS (SELECT 1 FROM suppression_tokens WHERE phone_lookup_hash = @lookup_hash)
+            UPDATE suppression_tokens
+            SET reason = 'erasure_request'
+            WHERE phone_lookup_hash = @lookup_hash;
+          ELSE
             INSERT INTO suppression_tokens (phone_lookup_hash, reason)
             VALUES (@lookup_hash, 'erasure_request');
         `);
@@ -313,7 +565,8 @@ export class ArtworkService {
 
           UPDATE interview_sessions
           SET state = 'complete', completed_at = SYSUTCDATETIME(), updated_at = SYSUTCDATETIME()
-          WHERE id = @session_id;
+          WHERE id = @session_id
+            AND state NOT IN ('opted_out', 'expired');
         `);
 
       await transaction.commit();

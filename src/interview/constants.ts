@@ -20,7 +20,8 @@ export const PROMPTS = {
     "Welcome to ManateeCaller — a small art experiment. We'll ask three short questions. Please reply to each with a voice note. Your answers become one anonymous colour in our shared mosaic. Reply STOP any time to opt out.",
   wrongMedia:
     "Please reply with a voice note for this question. Text and other media can't be used for your tile.",
-  optOut: "You've been unsubscribed from ManateeCaller. We won't message you again. Reply START if you change your mind.",
+  optOut: "You've been unsubscribed from ManateeCaller. We won't message you again.",
+  erased: "Your ManateeCaller data has been deleted. We won't message you again.",
   complete: (slug: string, baseUrl: string) =>
     `Thank you for floating with us. Your tile is now part of the mosaic: ${baseUrl}/mosaic.html#${slug}`,
   expired:

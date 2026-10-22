@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 12;
@@ -30,6 +30,16 @@ export function decryptString(ciphertext: string, keyHex: string): string {
 
 export function hmacHex(input: string, keyHex: string): string {
   return createHmac("sha256", keyFromHex(keyHex)).update(input).digest("hex");
+}
+
+/**
+ * Compare two strings without leaking their lengths. Both sides are hashed to a
+ * fixed 32-byte digest first, then the digests are compared in constant time.
+ */
+export function safeEqualText(left: string, right: string): boolean {
+  const a = createHash("sha256").update(left).digest();
+  const b = createHash("sha256").update(right).digest();
+  return timingSafeEqual(a, b);
 }
 
 export function randomSlug(length = 12): string {

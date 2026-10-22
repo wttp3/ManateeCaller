@@ -13,6 +13,7 @@ import { JobService } from "./services/job.service.js";
 import { WhatsAppService } from "./services/whatsapp.service.js";
 import { INBOUND_IGNORED_MESSAGE, isPilotSenderAllowed, maskPhone } from "./pilot/allowlist.js";
 import { normalizePhone } from "./utils/phone.js";
+import { safeEqualText } from "./utils/crypto.js";
 import { logError, logInfo } from "./utils/logger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -95,13 +96,23 @@ export function createApp(config: AppConfig): Express {
     express.json(),
     rateLimit({ windowMs: 60 * 60 * 1000, max: 10 }),
     async (req, res) => {
+      if (!config.erasureAdminToken) {
+        res.sendStatus(404);
+        return;
+      }
+      const header = req.header("authorization") ?? "";
+      const provided = header.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
+      if (!safeEqualText(provided, config.erasureAdminToken)) {
+        res.sendStatus(401);
+        return;
+      }
       try {
         const { participantId } = req.body as { participantId?: string };
         if (!participantId) {
           res.status(400).json({ ok: false, error: "participantId required" });
           return;
         }
-        await participants.deleteParticipant(participantId);
+        await interview.eraseParticipant(participantId);
         res.json({ ok: true });
       } catch (err) {
         logError("Erasure failed", { error: err instanceof Error ? err.message : "unknown" });
@@ -165,7 +176,7 @@ export function createApp(config: AppConfig): Express {
               }
 
               const eventKey = `msg:${message.id}`;
-              const isNew = await jobs.recordWebhook(eventKey, message);
+              const isNew = await jobs.recordWebhook(eventKey, message, participants.phoneLookupHash(from));
               if (!isNew) {
                 continue;
               }

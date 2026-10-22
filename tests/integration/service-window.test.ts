@@ -156,6 +156,19 @@ describe("24-hour service window", () => {
     expect(session?.current_question_index).toBe(0);
   });
 
+  it("enqueues finalize with the participant id and no phone number", async () => {
+    const { participantId, sessionId } = seedSession("awaiting_voice_q3", new Date(Date.now() + 60 * 60 * 1000));
+    await interview().processVoiceNote({ sessionId, participantId, mediaId: "media-last-open" });
+    expect(memoryDebug.errors.filter((error) => error.startsWith("Unhandled"))).toEqual([]);
+    expect(memorySnapshot().sessions[0]?.state).toBe("processing");
+    expect(memorySnapshot().jobs).toHaveLength(1);
+    const payload = JSON.parse(memorySnapshot().jobs[0]?.payload_json ?? "{}") as Record<string, unknown>;
+    expect(payload).toEqual({ sessionId, participantId });
+    expect(memorySnapshot().jobs[0]?.participant_id).toBe(participantId);
+    expect(JSON.stringify(payload)).not.toContain(PHONE);
+    expect(JSON.stringify(payload)).not.toContain(PHONE.slice(1));
+  });
+
   it("expires the last answer without enqueueing finalize when the window is closed", async () => {
     const { participantId, sessionId } = seedSession("awaiting_voice_q3", new Date(Date.now() - 1000));
     await interview().processVoiceNote({ sessionId, participantId, mediaId: "media-last" });
@@ -165,8 +178,8 @@ describe("24-hour service window", () => {
   });
 
   it("does not send the mosaic link after the window has closed", async () => {
-    const { sessionId } = seedSession("processing", new Date(Date.now() - 1000));
-    await interview().finalizeInterview({ sessionId, phone: PHONE });
+    const { participantId, sessionId } = seedSession("processing", new Date(Date.now() - 1000));
+    await interview().finalizeInterview({ sessionId, participantId });
     expect(memoryDebug.errors.filter((error) => error.startsWith("Unhandled"))).toEqual([]);
     expect(memorySnapshot().sessions[0]?.state).toBe("expired");
     expect(memorySnapshot().artwork).toHaveLength(0);
@@ -175,13 +188,13 @@ describe("24-hour service window", () => {
   });
 
   it("sends the mosaic link and marks the session complete only after that send", async () => {
-    const { sessionId } = seedSession("processing", new Date(Date.now() + 60 * 60 * 1000));
+    const { participantId, sessionId } = seedSession("processing", new Date(Date.now() + 60 * 60 * 1000));
     memorySnapshot().responses.push({
       session_id: sessionId,
       question_index: 0,
       encrypted_transcript: encryptString("calm water", KEY),
     });
-    await interview().finalizeInterview({ sessionId, phone: PHONE });
+    await interview().finalizeInterview({ sessionId, participantId });
     expect(memoryDebug.errors.filter((error) => error.startsWith("Unhandled"))).toEqual([]);
     expect(memorySnapshot().sessions[0]?.state).toBe("complete");
     expect(memorySnapshot().artwork).toHaveLength(1);
@@ -192,13 +205,13 @@ describe("24-hour service window", () => {
 
   it("does not complete the session when the mosaic send fails", async () => {
     installMediaFetch(true);
-    const { sessionId } = seedSession("processing", new Date(Date.now() + 60 * 60 * 1000));
+    const { participantId, sessionId } = seedSession("processing", new Date(Date.now() + 60 * 60 * 1000));
     memorySnapshot().responses.push({
       session_id: sessionId,
       question_index: 0,
       encrypted_transcript: encryptString("calm water", KEY),
     });
-    await expect(interview().finalizeInterview({ sessionId, phone: PHONE })).rejects.toThrow(/WhatsApp send failed/);
+    await expect(interview().finalizeInterview({ sessionId, participantId })).rejects.toThrow(/WhatsApp send failed/);
     expect(memorySnapshot().sessions[0]?.state).toBe("processing");
     expect(memorySnapshot().artwork).toHaveLength(0);
   });
