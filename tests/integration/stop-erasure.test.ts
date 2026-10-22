@@ -254,7 +254,7 @@ describe("stop and erasure", () => {
     expect(memorySnapshot().consents.every((consent) => consent.withdrawn_at !== null)).toBe(true);
     expect(memorySnapshot().suppression.map((row) => row.reason)).toEqual(["stop"]);
     expect(memorySnapshot().jobs[0]?.status).toBe("cancelled");
-    expect(memorySnapshot().jobs[0]?.payload_json).toBe("{}");
+    expect(JSON.parse(memorySnapshot().jobs[0]?.payload_json ?? "{}")).toEqual({ mediaId: payload.mediaId });
     expect(memorySnapshot().jobs.find((job) => job.id === "job-legacy")?.status).toBe("cancelled");
     expect(memorySnapshot().jobs.find((job) => job.id === "job-legacy")?.payload_json).toBe("{}");
     expect(memorySnapshot().jobs.find((job) => job.id === "job-other")?.status).toBe("pending");
@@ -773,6 +773,75 @@ describe("stop and erasure", () => {
     const logged = vi.mocked(console.log).mock.calls.map((call) => String(call[0])).join("\n");
     expect(logged).toContain("Failed to delete WhatsApp media");
     expect(logged).not.toContain(ALLOWED.slice(1));
+    expect(unexpectedSql()).toEqual([]);
+  });
+
+  it("deletes a still-pending voice note when STOP is followed by erasure", async () => {
+    const { base, config } = await startApp();
+    await optIn(base);
+    const participant = memorySnapshot().participants[0];
+    const session = memorySnapshot().sessions[0];
+    if (!participant || !session) {
+      throw new Error("missing opt-in rows");
+    }
+
+    const mediaId = "media-still-pending";
+    memorySnapshot().jobs.push({
+      id: "job-pending-voice",
+      job_type: "process_voice_note",
+      payload_json: JSON.stringify({
+        sessionId: session.id,
+        participantId: participant.id,
+        mediaId,
+        messageId: "wamid.pending",
+        phone: ALLOWED,
+      }),
+      participant_id: null,
+      status: "pending",
+    });
+
+    const stopped = await postWebhook(base, textBody("STOP"));
+    expect(stopped.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(memorySnapshot().participants[0]?.status).toBe("opted_out");
+    });
+
+    const pending = memorySnapshot().jobs.find((job) => job.id === "job-pending-voice");
+    expect(pending?.status).toBe("cancelled");
+    expect(pending?.participant_id).toBe(participant.id);
+    expect(JSON.parse(pending?.payload_json ?? "{}")).toEqual({ mediaId });
+    expect(calls.some((call) => call.url.includes(mediaId))).toBe(true);
+
+    await new InterviewService(config).processVoiceNote({
+      sessionId: session.id,
+      participantId: participant.id,
+      mediaId,
+    });
+    expect(elevenCalls()).toHaveLength(0);
+    expect(calls.filter((call) => call.url.includes(mediaId)).length).toBeGreaterThanOrEqual(2);
+
+    session.state = "complete";
+    memorySnapshot().participants[0]!.status = "active";
+    memorySnapshot().suppression.splice(0, memorySnapshot().suppression.length);
+    await new InterviewService(config).processVoiceNote({
+      sessionId: session.id,
+      participantId: participant.id,
+      mediaId: "media-finished-session",
+    });
+    expect(calls.some((call) => call.url.includes("media-finished-session"))).toBe(true);
+    expect(elevenCalls()).toHaveLength(0);
+
+    const erased = await postWebhook(base, textBody("DELETE MY DATA"));
+    expect(erased.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(memorySnapshot().participants).toHaveLength(0);
+    });
+    const stored = JSON.stringify(memorySnapshot());
+    expect(stored).not.toContain(mediaId);
+    expect(stored).not.toContain("media-finished-session");
+    expect(stored).not.toContain("wamid.pending");
+    expect(stored).not.toContain(ALLOWED.slice(1));
+    expect(calls.filter((call) => call.url.includes(mediaId)).length).toBeGreaterThanOrEqual(3);
     expect(unexpectedSql()).toEqual([]);
   });
 });

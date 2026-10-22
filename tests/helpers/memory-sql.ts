@@ -218,7 +218,11 @@ function applyStop(inputs: Map<string, unknown>, store: MemoryStore): { recordse
         (job.status === "pending" || job.status === "processing")
       ) {
         job.status = "cancelled";
-        job.payload_json = "{}";
+        if (!job.participant_id) {
+          job.participant_id = participantId;
+        }
+        const mediaId = payloadField(job.payload_json, "mediaId");
+        job.payload_json = mediaId ? JSON.stringify({ mediaId }) : "{}";
       }
     }
   }

@@ -22,6 +22,7 @@ describe("pendingMigrationFiles", () => {
       "001_initial.sql",
       "002_privacy_controls.sql",
       "003_legacy_privacy_backfill.sql",
+      "004_strip_job_message_id.sql",
     ]);
     expect(pendingMigrationFiles(files, first)).toEqual([]);
     expect(pendingMigrationFiles(files, new Set(first))).toEqual([]);
@@ -37,6 +38,12 @@ describe("legacy privacy backfill", () => {
     expect(sql).toContain("phone_lookup_hash IS NULL");
     expect(sql).toContain("DATEADD(day, -7, SYSUTCDATETIME())");
     expect(sql.toLowerCase()).toContain("cannot be derived");
+  });
+
+  it("strips leftover message ids from job payloads", () => {
+    const sql = readFileSync(join(repoRoot, "migrations/004_strip_job_message_id.sql"), "utf8");
+    expect(sql).toContain("'$.messageId'");
+    expect(sql).toContain("'$.message_id'");
   });
 
   it("matches legacy jobs by session id in stop and erasure", () => {

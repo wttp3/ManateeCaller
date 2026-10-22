@@ -321,9 +321,17 @@ export class ParticipantService {
           WHERE participant_id = @participant_id
             AND status = 'pending';
 
+          -- Drop phone numbers and message ids. Keep mediaId so erasure can still
+          -- ask Meta to delete a voice note that has not been transcribed, and
+          -- stamp participant_id so a legacy sessionId row stays owned by this person.
           UPDATE jobs
           SET status = 'cancelled',
-              payload_json = N'{}',
+              participant_id = COALESCE(participant_id, @participant_id),
+              payload_json = CASE
+                WHEN ISJSON(payload_json) = 1 AND JSON_VALUE(payload_json, '$.mediaId') IS NOT NULL
+                  THEN JSON_MODIFY(N'{}', '$.mediaId', JSON_VALUE(payload_json, '$.mediaId'))
+                ELSE N'{}'
+              END,
               updated_at = SYSUTCDATETIME()
           WHERE status IN ('pending', 'processing')
             AND (

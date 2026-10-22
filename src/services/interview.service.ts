@@ -125,6 +125,7 @@ export class InterviewService {
     const gate = await this.sendingBlocked(payload.participantId);
     if (gate.blocked) {
       logInfo("Skipping voice note because the participant is opted out or blocked");
+      await this.deleteMediaBestEffort(payload.mediaId);
       return;
     }
 
@@ -143,6 +144,7 @@ export class InterviewService {
       throw new Error("Session not found");
     }
     if (state === "opted_out" || state === "expired" || state === "complete") {
+      await this.deleteMediaBestEffort(payload.mediaId);
       return;
     }
 
@@ -357,12 +359,29 @@ export class InterviewService {
    */
   private async handleStop(lookupHash: string): Promise<void> {
     const participant = await this.participants.getParticipantByLookup(lookupHash);
+    const mediaIds = participant ? await this.participants.listMediaIds(participant.id) : [];
     const { sendConfirmation } = await this.participants.recordStop(participant?.id ?? null, lookupHash);
+    for (const mediaId of mediaIds) {
+      await this.deleteMediaBestEffort(mediaId);
+    }
     if (!sendConfirmation || !participant) {
       return;
     }
     const storedPhone = this.whatsapp.decryptPhone(participant.encryptedPhone);
     await this.whatsapp.sendText(storedPhone, PROMPTS.optOut, { bypassOptOut: true });
+  }
+
+  private async deleteMediaBestEffort(mediaId: string | null | undefined): Promise<void> {
+    if (!mediaId) {
+      return;
+    }
+    try {
+      await this.whatsapp.deleteMedia(mediaId);
+    } catch (err) {
+      logError("Failed to delete WhatsApp media", {
+        error: sanitiseStoredError(err instanceof Error ? err.message : "unknown"),
+      });
+    }
   }
 
   /**
@@ -373,13 +392,7 @@ export class InterviewService {
   async eraseParticipant(participantId: string): Promise<void> {
     const mediaIds = await this.participants.listMediaIds(participantId);
     for (const mediaId of mediaIds) {
-      try {
-        await this.whatsapp.deleteMedia(mediaId);
-      } catch (err) {
-        logError("Failed to delete WhatsApp media during erasure", {
-          error: sanitiseStoredError(err instanceof Error ? err.message : "unknown"),
-        });
-      }
+      await this.deleteMediaBestEffort(mediaId);
     }
     await this.participants.deleteParticipant(participantId);
   }

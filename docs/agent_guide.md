@@ -34,7 +34,7 @@ There is no approved `manatee_invite` template. A colleague opts in by sending t
 
 > You've been unsubscribed from ManateeCaller. We won't message you again.
 
-Send that confirmation only when this request is the one that opts them out and the 24-hour window is still open. Cancel pending invites and jobs, including jobs that only name the session id. Do not send anything else. A later opt-in keyword can opt them back in. Do not let a late job or outbox write change `opted_out`, `cancelled`, or an erased row.
+Send that confirmation only when this request is the one that opts them out and the 24-hour window is still open. Cancel pending invites and jobs, including jobs that only name the session id. Delete pending voice-note media (best effort) and keep only `mediaId` on the cancelled job so a later erasure can retry. Do not send anything else. A later opt-in keyword can opt them back in. Do not let a late job or outbox write change `opted_out`, `cancelled`, or an erased row. A skipped voice-note job still deletes its WhatsApp media.
 
 ## Erasure
 
