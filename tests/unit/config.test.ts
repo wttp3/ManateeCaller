@@ -15,9 +15,9 @@ describe("config", () => {
       WHATSAPP_WEBHOOK_VERIFY_TOKEN: "verify-token",
       WHATSAPP_TEMPLATE_NAME: "manatee_invite",
       ELEVENLABS_API_KEY: "eleven-key",
-      DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      TILE_HMAC_KEY: "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
-      LOOKUP_HMAC_KEY: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      DATA_ENCRYPTION_KEY: "ab".repeat(32),
+      TILE_HMAC_KEY: "cd".repeat(32),
+      LOOKUP_HMAC_KEY: "ef".repeat(32),
     });
 
     const redacted = redactConfig(config);
