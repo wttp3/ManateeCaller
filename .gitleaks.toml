@@ -1,0 +1,12 @@
+title = "ManateeCaller gitleaks config"
+
+[extend]
+useDefault = true
+
+# Commit 3058758 still contains low-entropy repeating hex fixtures
+# (generic-api-key) in .env.example and unit tests. They are sample
+# material, not live credentials. History is not rewritten, so this
+# allowlist is limited to that commit. Later commits are still scanned.
+[allowlist]
+description = "Sample hex fixtures in 3058758 only"
+commits = ["305875832b090002390aa90d4732729e4f81f4ab"]

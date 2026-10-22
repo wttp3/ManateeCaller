@@ -46,6 +46,8 @@
 
 ### Local SQL Server
 
+`MSSQL_SA_PASSWORD` in `docker-compose.yml` and the `Password` in `DATABASE_URL` (`.env.example`) both use `YourStrong!Passw0rd`. That value is a local-only sample. If you change it, keep the two copies identical.
+
 ```bash
 docker compose up -d
 ```

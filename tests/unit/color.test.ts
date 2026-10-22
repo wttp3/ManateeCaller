@@ -7,10 +7,10 @@ describe("color utils", () => {
   });
 
   it("produces deterministic HMAC colour", () => {
-    const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const tileHmac = "ab".repeat(32);
     const combined = combineTranscripts(["Blue morning", "blue morning"]);
-    const color = transcriptToColor(combined, key);
+    const color = transcriptToColor(combined, tileHmac);
     expect(color).toMatch(/^#[0-9a-f]{6}$/);
-    expect(transcriptToColor(combined, key)).toBe(color);
+    expect(transcriptToColor(combined, tileHmac)).toBe(color);
   });
 });
